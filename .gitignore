@@ -1,0 +1,9 @@
+# Datos locales de sesiones e identidades (nunca commitear capturas reales)
+data/*.jsonl
+data/*.csv
+data/*.html
+data/tags.json
+!data/.gitkeep
+
+__pycache__/
+*.pyc

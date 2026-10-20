@@ -404,6 +404,18 @@ def make_handler(hub: HubState):
                     tmp_path.unlink(missing_ok=True)
                 return
 
+            if path == "/export/hc22000":
+                dataset, _, _, _, _ = hub.build_current_dataset()
+                lines = dataset.get("hc22000_lines", [])
+                content = ("\n".join(lines) + ("\n" if lines else "")).encode("utf-8")
+                self._send_bytes(
+                    200,
+                    "text/plain; charset=utf-8",
+                    content,
+                    {"Content-Disposition": 'attachment; filename="handshakes.hc22000"'},
+                )
+                return
+
             self._send_json(404, {"error": "not found"})
 
         def do_POST(self):

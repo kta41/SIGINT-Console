@@ -20,7 +20,7 @@ def render_sigint_dashboard(dataset: dict, initial_tags: dict, html_path: Path) 
     dataset_json = json.dumps(dataset, ensure_ascii=False, separators=(",", ":"))
     tags_json = json.dumps(initial_tags, ensure_ascii=False, separators=(",", ":"))
 
-    doc = f"""<!doctype html>
+    doc = rf"""<!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
@@ -404,6 +404,7 @@ code, .mono {{
   </div>
   <div class="top-actions no-print">
     <label class="btn btn-primary" id="srv-upload-btn" style="display:none">📥 Importar .JSONL / .PCAP <input type="file" accept=".jsonl,.json,.ndjson,.pcap" multiple style="display:none" onchange="uploadJsonlFiles(event)"></label>
+    <a class="btn" id="hc22000-dl-btn" href="/export/hc22000" style="display:none;border-color:rgba(245,158,11,0.55);color:#fbbf24">🔓 Descargar .hc22000</a>
     <button onclick="openTagManagerModal()">🏷️ Nuevo Tag / Alias</button>
     <button onclick="exportTagsJson()">💾 Exportar tags.json</button>
     <label class="btn">📂 Importar tags.json <input type="file" accept=".json" style="display:none" onchange="importTagsJson(event)"></label>
@@ -415,8 +416,8 @@ code, .mono {{
   <button class="tab-btn active" onclick="switchTab('overview', this)">1. Resumen Ejecutivo &amp; Riesgos</button>
   <button class="tab-btn" onclick="switchTab('networks', this)">2. Inteligencia de Redes (APs / SSIDs)</button>
   <button class="tab-btn" onclick="switchTab('devices', this)">3. Inteligencia de Dispositivos (STAs &amp; PNL)</button>
-  <button class="tab-btn" onclick="switchTab('cross', this)">4. Cruce Multi-Sesión (Persistencia)</button>
-  <button class="tab-btn" onclick="switchTab('sessions', this)">5. Sesiones &amp; GPS</button>
+  <button class="tab-btn" onclick="switchTab('cross', this)">4. Álgebra de Conjuntos &amp; Cruce Multi-Sesión</button>
+  <button class="tab-btn" onclick="switchTab('sessions', this)">5. Sesiones, PCAP &amp; GPS</button>
   <button class="tab-btn" onclick="switchTab('tags', this)">6. Registro de Identidades (Tags)</button>
 </nav>
 
@@ -448,22 +449,29 @@ code, .mono {{
         <span class="mono" id="net-count-label"></span>
       </h3>
       <div class="toolbar">
-        <input type="text" id="net-search" placeholder="Filtrar por SSID, BSSID, Tag, Fabricante, Canal..." style="min-width:290px" oninput="renderNetworksTable()">
+        <input type="text" id="net-search" placeholder="Consulta DSL o texto (ej: rssi>-65 and not tag:PROPIO and pcap:EAPOL)" style="min-width:390px;flex:1" oninput="renderNetworksTable()">
         <select id="net-session-filter" onchange="renderNetworksTable()">
           <option value="">Todas las sesiones</option>
         </select>
+        <select id="net-not-session-filter" onchange="renderNetworksTable()" title="Excluir redes vistas en esta sesión (Diferencia rápida)">
+          <option value="">Excluir sesión: Ninguna</option>
+        </select>
+        <button class="no-print" onclick="bulkTagCurrentNetworks()">🏷️ Etiquetar Filtradas</button>
+      </div>
+      <div class="toolbar" style="margin-top:-4px">
         <div class="chip-group" id="net-chips">
           <span class="chip active" onclick="setNetFilter('all', this)">Todas</span>
           <span class="chip" onclick="setNetFilter('insecure', this)" style="border-color:rgba(239,68,68,0.45);color:#f87171">⚠️ Redes No Seguras (OPEN/WEP/TKIP/WPS)</span>
           <span class="chip" onclick="setNetFilter('weak', this)">Cifrado Débil (OPEN/WEP/TKIP)</span>
           <span class="chip" onclick="setNetFilter('wps', this)">WPS Expuesto</span>
           <span class="chip" onclick="setNetFilter('pcap', this)" style="border-color:rgba(16,185,129,0.45);color:#34d399">📦 Con Trazas PCAP</span>
-          <span class="chip" onclick="setNetFilter('eapol', this)" style="border-color:rgba(245,158,11,0.55);color:#fbbf24">🔑 Handshake EAPOL</span>
+          <span class="chip" onclick="setNetFilter('eapol', this)" style="border-color:rgba(245,158,11,0.55);color:#fbbf24">🔑 EAPOL / Handshake</span>
           <span class="chip" onclick="setNetFilter('multi', this)">Multi-Sesión (&ge;2)</span>
           <span class="chip" onclick="setNetFilter('clients', this)">Con Clientes Activos</span>
           <span class="chip" onclick="setNetFilter('probed', this)">Buscadas por STAs</span>
           <span class="chip" onclick="setNetFilter('hidden', this)">SSID Oculto</span>
           <span class="chip" onclick="setNetFilter('tagged', this)">Etiquetadas</span>
+          <span class="chip" onclick="setNetFilter('untagged', this)">Sin Etiqueta</span>
         </div>
       </div>
       <div id="net-vuln-banner" style="display:none;margin-bottom:14px"></div>
@@ -500,18 +508,28 @@ code, .mono {{
         <span class="mono" id="dev-count-label"></span>
       </h3>
       <div class="toolbar">
-        <input type="text" id="dev-search" placeholder="Buscar por STA MAC, Tag, SSID buscado, AP conectado, OUI..." style="min-width:320px" oninput="renderDevicesTable()">
+        <input type="text" id="dev-search" placeholder="Consulta DSL o texto (ej: session:A and not session:B and rssi>-70 and not mac:random)" style="min-width:410px;flex:1" oninput="renderDevicesTable()">
+        <select id="dev-session-filter" onchange="renderDevicesTable()">
+          <option value="">En sesión: Todas</option>
+        </select>
+        <select id="dev-not-session-filter" onchange="renderDevicesTable()" title="Excluir dispositivos vistos en esta sesión (ej. en A pero NO en B)">
+          <option value="">Excluir sesión: Ninguna</option>
+        </select>
+        <button class="no-print" onclick="bulkTagCurrentDevices()">🏷️ Etiquetar Filtrados</button>
+      </div>
+      <div class="toolbar" style="margin-top:-4px">
         <div class="chip-group" id="dev-chips">
           <span class="chip active" onclick="setDevFilter('all', this)">Todos</span>
           <span class="chip" onclick="setDevFilter('insecure_ap', this)" style="border-color:rgba(239,68,68,0.45);color:#f87171">⚠️ En Red No Segura</span>
           <span class="chip" onclick="setDevFilter('pcap', this)" style="border-color:rgba(16,185,129,0.45);color:#34d399">📦 Con Trazas PCAP</span>
-          <span class="chip" onclick="setDevFilter('eapol', this)" style="border-color:rgba(245,158,11,0.55);color:#fbbf24">🔑 Handshake EAPOL</span>
+          <span class="chip" onclick="setDevFilter('eapol', this)" style="border-color:rgba(245,158,11,0.55);color:#fbbf24">🔑 EAPOL / Handshake</span>
           <span class="chip" onclick="setDevFilter('multi', this)">Recurrentes (&ge;2 sesiones)</span>
           <span class="chip" onclick="setDevFilter('associated', this)">Asociados a un AP</span>
           <span class="chip" onclick="setDevFilter('probing', this)">Buscando Redes (PNL)</span>
           <span class="chip" onclick="setDevFilter('matched', this)">Busca Red Presente Aquí</span>
           <span class="chip" onclick="setDevFilter('global_mac', this)">MAC Real IEEE (No aleatoria)</span>
           <span class="chip" onclick="setDevFilter('tagged', this)">Etiquetados</span>
+          <span class="chip" onclick="setDevFilter('untagged', this)">Sin Etiqueta</span>
         </div>
       </div>
       <div class="table-wrap">
@@ -604,6 +622,146 @@ const STORAGE_KEY = "wardrive_sigint_tags_v1";
 let TAGS = loadTags();
 let netFilter = "all";
 let devFilter = "all";
+let lastFilteredNetworks = [];
+let lastFilteredDevices = [];
+let setAlgState = {{
+  entity: "devices",
+  op: "diff_ab",
+  groupA: [],
+  groupB: [],
+  groupC: [],
+  initialized: false,
+}};
+
+/* ---------------- EVALUADOR DE CONSULTAS AVANZADAS (DSL) ---------------- */
+
+function evalSingleAtom(atomRaw, item, entityType) {{
+  let atom = atomRaw.trim();
+  if (!atom) return true;
+  let neg = false;
+  if (/^(not\\s+|!|-)/i.test(atom)) {{
+    neg = true;
+    atom = atom.replace(/^(not\\s+|!|-)/i, "").trim();
+  }}
+  const res = evalPositiveAtom(atom, item, entityType);
+  return neg ? !res : res;
+}}
+
+function matchSessionToken(sessionsArr, val) {{
+  const v = val.toLowerCase();
+  return (sessionsArr || []).some(sid => {{
+    const disp = getSessionDisplay(sid).toLowerCase();
+    return sid.toLowerCase().includes(v) || disp.includes(v);
+  }});
+}}
+
+function evalPositiveAtom(atom, item, entityType) {{
+  const mNum = atom.match(/^(rssi|ch|channel|clients|stas|sessions|frames|sightings)\\s*(>=|<=|!=|=|>|<|:)\\s*(-?\\d+)$/i);
+  if (mNum) {{
+    const field = mNum[1].toLowerCase();
+    const op = mNum[2] === ":" ? "=" : mNum[2];
+    const target = parseInt(mNum[3], 10);
+    let actual = 0;
+    if (field === "rssi") actual = item.rssi;
+    else if (field === "ch" || field === "channel") actual = entityType === "ap" ? item.primary_channel : item.channel;
+    else if (field === "clients" || field === "stas") actual = (item.clients || []).length;
+    else if (field === "sessions") actual = (item.sessions || []).length;
+    else if (field === "frames") actual = item.total_frames || item.pcap_frames || 0;
+    else if (field === "sightings") actual = item.sightings || 0;
+
+    if (op === ">") return actual > target;
+    if (op === ">=") return actual >= target;
+    if (op === "<") return actual < target;
+    if (op === "<=") return actual <= target;
+    if (op === "!=") return actual !== target;
+    return actual === target;
+  }}
+
+  const mKv = atom.match(/^([a-z_]+)\\s*(:|=|!=)\\s*(.+)$/i);
+  if (mKv) {{
+    const k = mKv[1].toLowerCase();
+    const isNeq = mKv[2] === "!=";
+    const v = mKv[3].replace(/^["']|["']$/g, "").toLowerCase().trim();
+    const tag = entityType === "ap" ? getNetworkTag(item.bssid, item.ssid) : getDeviceTag(item.sta_mac);
+    const traces = (item.pcap_traces || []).map(x => x.toLowerCase());
+    let hit = false;
+
+    if (k === "session" || k === "ses") {{
+      hit = matchSessionToken(item.sessions, v);
+    }} else if (k === "pcap" || k === "trace") {{
+      hit = v === "any" || v === "true" ? traces.length > 0 : traces.some(t => t.includes(v));
+    }} else if (k === "tag" || k === "cat" || k === "category") {{
+      if (v === "none" || v === "false" || v === "empty") {{
+        hit = !tag || !tag.label;
+      }} else if (v === "any" || v === "true") {{
+        hit = Boolean(tag && tag.label);
+      }} else {{
+        const tStr = ((tag ? tag.label : "") + " " + (tag ? tag.category : "")).toLowerCase();
+        hit = tStr.includes(v);
+      }}
+    }} else if (k === "vendor" || k === "oui") {{
+      const wpsMan = item.wps_info && item.wps_info.manufacturer ? item.wps_info.manufacturer : "";
+      hit = ((item.vendor || "") + " " + wpsMan).toLowerCase().includes(v);
+    }} else if (k === "ssid") {{
+      if (entityType === "ap") hit = (item.ssid || "").toLowerCase().includes(v);
+      else hit = [...(item.associated_ssids || []), ...(item.probed_ssids || [])].some(s => s.toLowerCase().includes(v));
+    }} else if (k === "probe" || k === "pnl") {{
+      const arr = entityType === "ap" ? (item.probing_stas || []) : (item.probed_ssids || []);
+      hit = v === "any" || v === "true" ? arr.length > 0 : arr.some(s => s.toLowerCase().includes(v));
+    }} else if (k === "bssid" || k === "ap") {{
+      if (entityType === "ap") hit = (item.bssid || "").toLowerCase().includes(v);
+      else hit = (item.associated_bssids || []).some(b => b.toLowerCase().includes(v));
+    }} else if (k === "mac" || k === "sta") {{
+      if (v === "random" || v === "laa") hit = Boolean(item.is_randomized);
+      else if (v === "global" || v === "real" || v === "ieee") hit = !item.is_randomized;
+      else hit = ((item.sta_mac || item.bssid || "")).toLowerCase().includes(v);
+    }} else if (k === "auth" || k === "sec") {{
+      hit = ((item.auth_mode || "") + " " + (item.pairwise_cipher || "")).toLowerCase().includes(v);
+    }} else if (k === "wps") {{
+      if (v === "true" || v === "yes" || v === "si" || v === "1") hit = Boolean(item.wps);
+      else if (v === "false" || v === "no" || v === "0") hit = !item.wps;
+      else hit = JSON.stringify(item.wps_info || {{}}).toLowerCase().includes(v);
+    }} else if (k === "hidden") {{
+      hit = (v === "true" || v === "1" || v === "si") ? Boolean(item.hidden) : !item.hidden;
+    }} else if (k === "fp" || k === "ie") {{
+      hit = (item.ie_fingerprint || "").toLowerCase().includes(v);
+    }} else {{
+      hit = buildHaystack(item, entityType).includes(atom.toLowerCase());
+    }}
+    return isNeq ? !hit : hit;
+  }}
+
+  return buildHaystack(item, entityType).includes(atom.toLowerCase());
+}}
+
+function buildHaystack(item, entityType) {{
+  const tag = entityType === "ap" ? getNetworkTag(item.bssid, item.ssid) : getDeviceTag(item.sta_mac);
+  const wpsStr = item.wps_info ? Object.values(item.wps_info).join(" ") : "";
+  if (entityType === "ap") {{
+    return [
+      item.ssid, item.bssid, item.vendor, item.auth_mode, item.pairwise_cipher,
+      "ch" + item.primary_channel, tag ? tag.label : "", tag ? tag.category : "",
+      wpsStr, ...(item.pcap_traces || []), ...(item.deauth_reasons || [])
+    ].join(" ").toLowerCase();
+  }}
+  return [
+    item.sta_mac, item.vendor, item.ie_fingerprint || "",
+    ...(item.probed_ssids || []), ...(item.associated_bssids || []),
+    ...(item.associated_ssids || []), ...(item.pcap_traces || []),
+    tag ? tag.label : "", tag ? tag.category : ""
+  ].join(" ").toLowerCase();
+}}
+
+function evaluateDslQuery(queryStr, item, entityType) {{
+  const q = (queryStr || "").trim();
+  if (!q) return true;
+  // Separar por OR (|) y dentro de cada rama por AND (& o espacio con palabras clave)
+  const orBranches = q.split(/\\s+or\\s+|\\s*\\|\\|\\s*/i);
+  return orBranches.some(branch => {{
+    const andAtoms = branch.split(/\\s+and\\s+|\\s*&&\\s*/i);
+    return andAtoms.every(atom => evalSingleAtom(atom, item, entityType));
+  }});
+}}
 
 function loadTags() {{
   const base = {{
@@ -710,7 +868,9 @@ function renderPcapTracesBadges(traces, framesCount) {{
   const arr = Array.isArray(traces) ? traces : [];
   if (arr.length === 0) return '<span style="color:var(--muted)">—</span>';
   const badgeMap = {{
-    EAPOL:      {{ cls: "b-target",     label: "🔑 EAPOL",      tip: "Handshake WPA/WPA2/WPA3 (EAPOL 0x888E) capturado en PCAP" }},
+    HANDSHAKE:  {{ cls: "b-suspicious", label: "🔓 HANDSHAKE",  tip: "4-Way Handshake WPA completo (M1+M2) extraíble a hc22000" }},
+    PMKID:      {{ cls: "b-target",     label: "🗝️ PMKID",      tip: "RSN PMKID en EAPOL M1 capturado y extraíble a hc22000" }},
+    EAPOL:      {{ cls: "b-target",     label: "🔑 EAPOL",      tip: "Trama EAPOL (0x888E) de negociación WPA capturada en PCAP" }},
     DEAUTH:     {{ cls: "b-suspicious", label: "⚡ DEAUTH",     tip: "Trama Deauthentication / Disassociation capturada en PCAP" }},
     ASSOC:      {{ cls: "b-own",        label: "🔗 ASSOC",      tip: "Association / Reassociation Req/Resp capturada en PCAP" }},
     AUTH:       {{ cls: "b-own",        label: "🛡️ AUTH",       tip: "Trama Authentication 802.11 capturada en PCAP" }},
@@ -918,16 +1078,19 @@ function getApVulnerabilities(ap) {{
 }}
 
 function renderNetworksTable() {{
-  const q = (document.getElementById("net-search").value || "").toLowerCase().trim();
+  const q = (document.getElementById("net-search").value || "").trim();
   const sesFilter = document.getElementById("net-session-filter").value;
+  const notSesEl = document.getElementById("net-not-session-filter");
+  const notSesFilter = notSesEl ? notSesEl.value : "";
 
   const filtered = DATA.aps.filter(ap => {{
     const tag = getNetworkTag(ap.bssid, ap.ssid);
     const traces = ap.pcap_traces || [];
     if (sesFilter && !ap.sessions.includes(sesFilter)) return false;
+    if (notSesFilter && ap.sessions.includes(notSesFilter)) return false;
     if (netFilter === "insecure" && !ap.is_weak && !ap.wps) return false;
     if (netFilter === "pcap" && traces.length === 0) return false;
-    if (netFilter === "eapol" && !traces.includes("EAPOL")) return false;
+    if (netFilter === "eapol" && !traces.includes("EAPOL") && !traces.includes("PMKID") && !traces.includes("HANDSHAKE")) return false;
     if (netFilter === "multi" && ap.sessions.length < 2) return false;
     if (netFilter === "clients" && ap.clients.length === 0) return false;
     if (netFilter === "probed" && ap.probing_stas.length === 0) return false;
@@ -935,16 +1098,12 @@ function renderNetworksTable() {{
     if (netFilter === "wps" && !ap.wps) return false;
     if (netFilter === "hidden" && !ap.hidden) return false;
     if (netFilter === "tagged" && (!tag || !tag.label)) return false;
+    if (netFilter === "untagged" && tag && tag.label) return false;
 
-    if (!q) return true;
-    const hay = [
-      ap.ssid, ap.bssid, ap.vendor, ap.auth_mode, ap.pairwise_cipher,
-      "ch" + ap.primary_channel, tag ? tag.label : "", tag ? tag.category : "",
-      ...traces
-    ].join(" ").toLowerCase();
-    return hay.includes(q);
+    return evaluateDslQuery(q, ap, "ap");
   }});
 
+  lastFilteredNetworks = filtered;
   document.getElementById("net-count-label").textContent = `${{filtered.length}} / ${{DATA.aps.length}} BSSIDs`;
 
   // Banner explicativo cuando se filtra por Redes No Seguras / Cifrado Débil / WPS / Oculto
@@ -995,6 +1154,10 @@ function renderNetworksTable() {{
         `</div>`
       : "";
 
+    const wpsModel = ap.wps_info && (ap.wps_info.model_name || ap.wps_info.device_name)
+      ? `<div class="mono" style="font-size:11px;color:var(--accent);margin-top:2px">🔍 WPS: ${{esc(ap.wps_info.model_name || ap.wps_info.device_name)}}</div>`
+      : "";
+
     return `<tr>
       <td>${{rssiBar(ap.rssi)}}</td>
       <td class="mono">${{ap.primary_channel}} <span style="color:var(--muted)">(${{ap.band_mhz}})</span></td>
@@ -1007,7 +1170,7 @@ function renderNetworksTable() {{
       <td>${{stasHtml}}</td>
       <td>${{probedHtml}}</td>
       <td>${{sesBadge}}</td>
-      <td>${{esc(ap.vendor)}}</td>
+      <td>${{esc(ap.vendor)}}${{wpsModel}}</td>
       <td class="no-print">
         <button onclick="openTagEditor('network', '${{ap.bssid}}', '${{esc(ap.ssid || ap.bssid)}}')">🏷️ Tag</button>
       </td>
@@ -1026,11 +1189,17 @@ function setDevFilter(f, el) {{
 }}
 
 function renderDevicesTable() {{
-  const q = (document.getElementById("dev-search").value || "").toLowerCase().trim();
+  const q = (document.getElementById("dev-search").value || "").trim();
+  const sesEl = document.getElementById("dev-session-filter");
+  const notSesEl = document.getElementById("dev-not-session-filter");
+  const sesFilter = sesEl ? sesEl.value : "";
+  const notSesFilter = notSesEl ? notSesEl.value : "";
 
   const filtered = DATA.devices.filter(d => {{
     const tag = getDeviceTag(d.sta_mac);
     const traces = d.pcap_traces || [];
+    if (sesFilter && !d.sessions.includes(sesFilter)) return false;
+    if (notSesFilter && d.sessions.includes(notSesFilter)) return false;
     if (devFilter === "insecure_ap") {{
       const onInsecure = d.associated_bssids.some(b => {{
         const ap = DATA.ap_by_bssid[b];
@@ -1039,33 +1208,29 @@ function renderDevicesTable() {{
       if (!onInsecure) return false;
     }}
     if (devFilter === "pcap" && traces.length === 0) return false;
-    if (devFilter === "eapol" && !traces.includes("EAPOL")) return false;
+    if (devFilter === "eapol" && !traces.includes("EAPOL") && !traces.includes("PMKID") && !traces.includes("HANDSHAKE")) return false;
     if (devFilter === "multi" && d.sessions.length < 2) return false;
     if (devFilter === "associated" && d.associated_bssids.length === 0) return false;
     if (devFilter === "probing" && d.probed_ssids.length === 0) return false;
     if (devFilter === "matched" && d.matched_local_ssids.length === 0) return false;
     if (devFilter === "global_mac" && d.is_randomized) return false;
     if (devFilter === "tagged" && (!tag || !tag.label)) return false;
+    if (devFilter === "untagged" && tag && tag.label) return false;
 
-    if (!q) return true;
-    const hay = [
-      d.sta_mac, d.vendor,
-      ...d.probed_ssids,
-      ...d.associated_bssids,
-      ...d.associated_ssids,
-      ...traces,
-      tag ? tag.label : "", tag ? tag.category : ""
-    ].join(" ").toLowerCase();
-    return hay.includes(q);
+    return evaluateDslQuery(q, d, "device");
   }});
 
+  lastFilteredDevices = filtered;
   document.getElementById("dev-count-label").textContent = `${{filtered.length}} / ${{DATA.devices.length}} dispositivos`;
 
   const rows = filtered.map(d => {{
     const tag = getDeviceTag(d.sta_mac);
-    const macType = d.is_randomized
+    const fpBadge = d.ie_fingerprint
+      ? ` <span class="badge b-multi mono" title="Huella de radio IE-Fingerprint en Probe Requests (permite correlacionar MACs aleatorias)" style="cursor:pointer" onclick="document.getElementById('dev-search').value='fp:${{d.ie_fingerprint}}';renderDevicesTable()">🧬 ${{esc(d.ie_fingerprint)}}</span>`
+      : "";
+    const macType = (d.is_randomized
       ? `<span class="badge b-neutral" title="Bit Locally-Administered activo">MAC Aleatoria</span>`
-      : `<span class="badge b-own" title="OUI IEEE global">${{esc(d.vendor)}}</span>`;
+      : `<span class="badge b-own" title="OUI IEEE global">${{esc(d.vendor)}}</span>`) + fpBadge;
 
     const assocHtml = d.associated_bssids.length > 0
       ? d.associated_bssids.map(b => {{
@@ -1108,11 +1273,176 @@ function renderDevicesTable() {{
     `<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:24px">Todavía no hay dispositivos clientes que coincidan con este filtro. Deja correr el modo promiscuo unos ciclos y ejecuta <code>warpull</code>.</td></tr>`;
 }}
 
+function toggleSetSession(grp, sid) {{
+  const arr = setAlgState[grp];
+  const idx = arr.indexOf(sid);
+  if (idx >= 0) arr.splice(idx, 1);
+  else arr.push(sid);
+  renderCrossSession();
+}}
+
+function setAlgebraOp(op) {{
+  setAlgState.op = op;
+  renderCrossSession();
+}}
+
+function setAlgebraEntity(ent) {{
+  setAlgState.entity = ent;
+  renderCrossSession();
+}}
+
+function computeSetAlgebraResults() {{
+  const A = new Set(setAlgState.groupA);
+  const B = new Set(setAlgState.groupB);
+  const op = setAlgState.op;
+
+  function checkMembership(itemSessions) {{
+    const inA = itemSessions.some(s => A.has(s));
+    const inB = itemSessions.some(s => B.has(s));
+    if (op === "diff_ab") return inA && !inB;        // A \ B
+    if (op === "diff_ba") return inB && !inA;        // B \ A
+    if (op === "inter")   return inA && inB;         // A ∩ B
+    if (op === "symdiff") return (inA && !inB) || (inB && !inA); // A Δ B
+    if (op === "union")   return inA || inB;         // A ∪ B
+    return false;
+  }}
+
+  if (setAlgState.entity === "devices") {{
+    return DATA.devices.filter(d => checkMembership(d.sessions));
+  }}
+  if (setAlgState.entity === "aps") {{
+    return DATA.aps.filter(a => checkMembership(a.sessions));
+  }}
+  // Huellas PNL (SSIDs buscados por clientes)
+  const ssidSessions = {{}};
+  DATA.devices.forEach(d => {{
+    (d.probed_ssids || []).forEach(ssid => {{
+      if (!ssidSessions[ssid]) ssidSessions[ssid] = new Set();
+      d.sessions.forEach(s => ssidSessions[ssid].add(s));
+    }});
+  }});
+  return Object.entries(ssidSessions)
+    .filter(([_, sSet]) => checkMembership(Array.from(sSet)))
+    .map(([ssid, sSet]) => ({{ ssid, sessions: Array.from(sSet) }}));
+}}
+
 function renderCrossSession() {{
+  if (!setAlgState.initialized && DATA.sessions.length > 0) {{
+    setAlgState.initialized = true;
+    setAlgState.groupA = [DATA.sessions[DATA.sessions.length - 1].session_id];
+    if (DATA.sessions.length >= 2) {{
+      setAlgState.groupB = [DATA.sessions[0].session_id];
+    }}
+  }}
+
+  const sesButtonsA = DATA.sessions.map(s => {{
+    const active = setAlgState.groupA.includes(s.session_id);
+    return `<span class="chip ${{active ? 'active' : ''}}" onclick="toggleSetSession('groupA','${{s.session_id}}')">${{esc(getSessionDisplay(s.session_id))}}</span>`;
+  }}).join(" ");
+
+  const sesButtonsB = DATA.sessions.map(s => {{
+    const active = setAlgState.groupB.includes(s.session_id);
+    return `<span class="chip ${{active ? 'active' : ''}}" onclick="toggleSetSession('groupB','${{s.session_id}}')">${{esc(getSessionDisplay(s.session_id))}}</span>`;
+  }}).join(" ");
+
+  const results = computeSetAlgebraResults();
+  const opLabels = {{
+    diff_ab: "A \\\\ B — Presentes en A pero NO en B (Nuevos / Intrusos respecto a B)",
+    diff_ba: "B \\\\ A — Presentes en B pero NO en A (Desaparecidos en A)",
+    inter:   "A ∩ B — Intersección (Co-presentes tanto en A como en B)",
+    symdiff: "A Δ B — Diferencia Simétrica (Exclusivos de A o de B, nunca en ambos)",
+    union:   "A ∪ B — Unión de los conjuntos seleccionados",
+  }};
+
+  let html = `
+    <div class="kv" style="margin-bottom:18px;border:1px solid var(--border-hi);background:#0c1324">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+        <div>
+          <span class="brand-badge">ÁLGEBRA DE CONJUNTOS ENTRE SESIONES</span>
+          <span style="margin-left:8px;font-weight:700;color:#f8fafc">Comparador Diferencial de Entornos (A vs B)</span>
+        </div>
+        <div class="chip-group">
+          <span class="chip ${{setAlgState.entity === 'devices' ? 'active' : ''}}" onclick="setAlgebraEntity('devices')">📱 Dispositivos (STAs)</span>
+          <span class="chip ${{setAlgState.entity === 'aps' ? 'active' : ''}}" onclick="setAlgebraEntity('aps')">📡 Redes (BSSIDs)</span>
+          <span class="chip ${{setAlgState.entity === 'pnl' ? 'active' : ''}}" onclick="setAlgebraEntity('pnl')">🔍 Redes Buscadas (PNL)</span>
+        </div>
+      </div>
+
+      <div class="grid-2" style="margin-bottom:12px">
+        <div class="kv">
+          <div class="kv-k" style="color:var(--accent);margin-bottom:6px">CONJUNTO A (Sesiones Objetivo / Actual): ${{setAlgState.groupA.length}} sel.</div>
+          <div class="chip-group">${{sesButtonsA || '<span style="color:var(--muted)">Sin sesiones</span>'}}</div>
+        </div>
+        <div class="kv">
+          <div class="kv-k" style="color:#c084fc;margin-bottom:6px">CONJUNTO B (Sesiones Línea Base / Comparación): ${{setAlgState.groupB.length}} sel.</div>
+          <div class="chip-group">${{sesButtonsB || '<span style="color:var(--muted)">Sin sesiones</span>'}}</div>
+        </div>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+        <div class="chip-group">
+          <span class="chip ${{setAlgState.op === 'diff_ab' ? 'active' : ''}}" onclick="setAlgebraOp('diff_ab')"><b>A \\\\ B</b> (En A y NO en B)</span>
+          <span class="chip ${{setAlgState.op === 'diff_ba' ? 'active' : ''}}" onclick="setAlgebraOp('diff_ba')"><b>B \\\\ A</b> (En B y NO en A)</span>
+          <span class="chip ${{setAlgState.op === 'inter' ? 'active' : ''}}" onclick="setAlgebraOp('inter')"><b>A ∩ B</b> (Comunes a A y B)</span>
+          <span class="chip ${{setAlgState.op === 'symdiff' ? 'active' : ''}}" onclick="setAlgebraOp('symdiff')"><b>A Δ B</b> (Exclusivos)</span>
+          <span class="chip ${{setAlgState.op === 'union' ? 'active' : ''}}" onclick="setAlgebraOp('union')"><b>A ∪ B</b> (Unión)</span>
+        </div>
+        ${{setAlgState.entity !== 'pnl' && results.length > 0 ? `<button onclick="bulkTagSetResults()">🏷️ Etiquetar los ${{results.length}} resultados</button>` : ""}}
+      </div>
+    </div>
+
+    <h4 style="margin-top:0">Resultado de <code>${{esc(opLabels[setAlgState.op])}}</code>: <span style="color:var(--accent)">${{results.length}} coincidencias</span></h4>
+  `;
+
+  if (results.length === 0) {{
+    html += `<div class="kv" style="margin-bottom:22px;color:var(--muted)">El conjunto resultante está vacío para la operación seleccionada.</div>`;
+  }} else if (setAlgState.entity === "devices") {{
+    html += `<table><thead><tr><th>STA MAC</th><th>Tag</th><th>Fabricante / IE-Fingerprint</th><th>RSSI</th><th>Trazas PCAP</th><th>Sesiones</th><th>APs / Redes Buscadas</th></tr></thead><tbody>`;
+    results.forEach(d => {{
+      const fp = d.ie_fingerprint ? ` <span class="badge b-multi mono">🧬 ${{esc(d.ie_fingerprint)}}</span>` : "";
+      html += `<tr>
+        <td><a class="entity-link mono" onclick="openDeviceDossier('${{d.sta_mac}}')">${{d.sta_mac}}</a></td>
+        <td>${{renderTagBadge(getDeviceTag(d.sta_mac))}}</td>
+        <td>${{esc(d.vendor)}}${{fp}}</td>
+        <td>${{rssiBar(d.rssi)}}</td>
+        <td>${{renderPcapTracesBadges(d.pcap_traces, d.pcap_frames)}}</td>
+        <td>${{d.sessions.map(s => `<span class="badge b-known">${{esc(getSessionDisplay(s))}}</span>`).join(" ")}}</td>
+        <td>${{[...d.associated_ssids, ...d.probed_ssids].map(esc).join(", ") || "—"}}</td>
+      </tr>`;
+    }});
+    html += `</tbody></table>`;
+  }} else if (setAlgState.entity === "aps") {{
+    html += `<table><thead><tr><th>BSSID</th><th>SSID</th><th>Tag</th><th>CH</th><th>RSSI</th><th>Seguridad</th><th>Trazas PCAP</th><th>Sesiones</th></tr></thead><tbody>`;
+    results.forEach(ap => {{
+      html += `<tr>
+        <td><a class="entity-link mono" onclick="openApDossier('${{ap.bssid}}')">${{ap.bssid}}</a></td>
+        <td><b>${{ap.hidden ? "&lt;OCULTA&gt;" : esc(ap.ssid)}}</b></td>
+        <td>${{renderTagBadge(getNetworkTag(ap.bssid, ap.ssid))}}</td>
+        <td class="mono">${{ap.primary_channel}}</td>
+        <td>${{rssiBar(ap.rssi)}}</td>
+        <td class="mono">${{esc(ap.auth_mode)}}/${{esc(ap.pairwise_cipher)}}</td>
+        <td>${{renderPcapTracesBadges(ap.pcap_traces, ap.pcap_frames)}}</td>
+        <td>${{ap.sessions.map(s => `<span class="badge b-known">${{esc(getSessionDisplay(s))}}</span>`).join(" ")}}</td>
+      </tr>`;
+    }});
+    html += `</tbody></table>`;
+  }} else {{
+    html += `<table><thead><tr><th>SSID Buscado (PNL)</th><th>Presente en el entorno</th><th>Sesiones donde se buscó</th></tr></thead><tbody>`;
+    results.forEach(r => {{
+      const local = DATA.matched_ssids_set.includes(r.ssid);
+      html += `<tr>
+        <td><a class="entity-link mono" onclick="openSsidDossier('${{esc(r.ssid)}}')">${{esc(r.ssid)}}</a></td>
+        <td>${{local ? '<span class="badge b-target">SÍ (AP local)</span>' : '<span class="badge b-neutral">No (Remota)</span>'}}</td>
+        <td>${{r.sessions.map(s => `<span class="badge b-known">${{esc(getSessionDisplay(s))}}</span>`).join(" ")}}</td>
+      </tr>`;
+    }});
+    html += `</tbody></table>`;
+  }}
+
   const multiDevs = DATA.devices.filter(d => d.sessions.length >= 2);
   const multiAps = DATA.aps.filter(a => a.sessions.length >= 2);
 
-  let html = `<h4>Dispositivos Clientes Vistos en Múltiples Sesiones (${{multiDevs.length}})</h4>`;
+  html += `<h4 style="margin-top:28px">Resumen Global — Dispositivos Clientes Recurrentes (&ge;2 Sesiones: ${{multiDevs.length}})</h4>`;
   if (multiDevs.length === 0) {{
     html += `<div class="kv" style="margin-bottom:18px;color:var(--muted)">Ningún cliente STA ha repetido en más de una sesión todavía.</div>`;
   }} else {{
@@ -1147,11 +1477,18 @@ function renderCrossSession() {{
 }}
 
 function renderSessionsTable() {{
-  const sel = document.getElementById("net-session-filter");
-  const curVal = sel.value;
-  sel.innerHTML = `<option value="">Todas las sesiones (${{DATA.sessions.length}})</option>` +
-    DATA.sessions.map(s => `<option value="${{s.session_id}}">${{esc(getSessionDisplay(s.session_id))}}</option>`).join("");
-  sel.value = curVal;
+  const optsHtml = DATA.sessions.map(s => `<option value="${{s.session_id}}">${{esc(getSessionDisplay(s.session_id))}}</option>`).join("");
+  const populateSelect = (id, firstLabel) => {{
+    const el = document.getElementById(id);
+    if (!el) return;
+    const cur = el.value;
+    el.innerHTML = `<option value="">${{firstLabel}}</option>` + optsHtml;
+    el.value = cur;
+  }};
+  populateSelect("net-session-filter", `En sesión: Todas (${{DATA.sessions.length}})`);
+  populateSelect("net-not-session-filter", "Excluir sesión: Ninguna");
+  populateSelect("dev-session-filter", `En sesión: Todas (${{DATA.sessions.length}})`);
+  populateSelect("dev-not-session-filter", "Excluir sesión: Ninguna");
 
   const rows = DATA.sessions.map(s => {{
     const st = getSessionTag(s.session_id);
@@ -1273,6 +1610,9 @@ function openApDossier(bssid) {{
       <div class="kv"><div class="kv-k">WPS / Oculta</div><div class="kv-v">WPS: ${{ap.wps ? "SÍ" : "NO"}} · Oculta: ${{ap.hidden ? "SÍ" : "NO"}}</div></div>
       <div class="kv"><div class="kv-k">Señal Máx / Visto</div><div class="kv-v">${{ap.rssi}} dBm (${{ap.sightings}} veces)</div></div>
       <div class="kv"><div class="kv-k">Trazas en PCAP</div><div class="kv-v">${{renderPcapTracesBadges(ap.pcap_traces, ap.pcap_frames)}}</div></div>
+      ${{ap.wps_info && Object.keys(ap.wps_info).length > 0 ? `<div class="kv"><div class="kv-k">Hardware WPS (PCAP)</div><div class="kv-v">${{esc([ap.wps_info.manufacturer, ap.wps_info.model_name, ap.wps_info.model_number, ap.wps_info.device_name].filter(Boolean).join(" · "))}}</div></div>` : ""}}
+      ${{ap.eapol_msgs && ap.eapol_msgs.length > 0 ? `<div class="kv"><div class="kv-k">Mensajes EAPOL Vistos</div><div class="kv-v" style="color:var(--amber)">${{esc(ap.eapol_msgs.join(", "))}}</div></div>` : ""}}
+      ${{ap.deauth_reasons && ap.deauth_reasons.length > 0 ? `<div class="kv"><div class="kv-k">Razones Deauth (IEEE)</div><div class="kv-v" style="color:var(--red)">${{esc(ap.deauth_reasons.join(", "))}}</div></div>` : ""}}
     </div>
     <h4>Evaluación de Seguridad y Vulnerabilidades Detectadas</h4>
     ${{(() => {{
@@ -1409,6 +1749,7 @@ function openDeviceDossier(mac) {{
       <div class="kv"><div class="kv-k">Señal Máx / Canal</div><div class="kv-v">${{d.rssi}} dBm (CH ${{d.channel}})</div></div>
       <div class="kv"><div class="kv-k">Tramas Capturadas</div><div class="kv-v">${{d.total_frames}} tramas</div></div>
       <div class="kv"><div class="kv-k">Trazas en PCAP</div><div class="kv-v">${{renderPcapTracesBadges(d.pcap_traces, d.pcap_frames)}}</div></div>
+      ${{d.ie_fingerprint ? `<div class="kv"><div class="kv-k">Huella IE-Fingerprint</div><div class="kv-v" style="color:#c084fc">🧬 ${{esc(d.ie_fingerprint)}}</div></div>` : ""}}
       <div class="kv"><div class="kv-k">Persistencia</div><div class="kv-v">${{d.sessions.length}} sesiones (${{d.sessions.map(getSessionDisplay).map(esc).join(", ")}})</div></div>
     </div>
     <h4>Puntos de Acceso a los que se ha asociado (${{d.associated_bssids.length}})</h4>
@@ -1503,6 +1844,71 @@ function saveEntityTag(group, key) {{
   }}
   saveTags();
   closeModal();
+}}
+
+let pendingBulkKeys = [];
+let pendingBulkGroup = "devices";
+
+function openBulkTagModal(group, keys, titleText) {{
+  if (!keys || keys.length === 0) return;
+  pendingBulkGroup = group;
+  pendingBulkKeys = keys;
+  const html = `
+    <div class="modal-header">
+      <div>
+        <div class="brand-badge">ETIQUETADO EN LOTE (BULK TAGGING)</div>
+        <h3 style="margin:6px 0 0 0">${{esc(titleText)}} (${{keys.length}} elementos)</h3>
+      </div>
+      <button onclick="closeModal()">✕</button>
+    </div>
+    <div style="display:grid;gap:12px">
+      <label>Alias común / Prefijo de etiqueta (ej. "Línea Base Casa", "Oficina", "Visitante"):<br>
+        <input type="text" id="bulk-tag-label" value="Línea Base" style="width:100%;margin-top:4px">
+      </label>
+      <label>Categoría para todos los elementos seleccionados:<br>
+        <select id="bulk-tag-cat" style="width:100%;margin-top:4px">
+          <option value="CONOCIDO" selected>CONOCIDO</option>
+          <option value="PROPIO">PROPIO</option>
+          <option value="OBJETIVO">OBJETIVO</option>
+          <option value="SOSPECHOSO">SOSPECHOSO</option>
+          <option value="IGNORAR">IGNORAR</option>
+        </select>
+      </label>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px">
+        <button onclick="closeModal()">Cancelar</button>
+        <button class="btn-primary" onclick="applyBulkTag()">Aplicar a ${{keys.length}} elementos</button>
+      </div>
+    </div>
+  `;
+  showModal(html);
+}}
+
+function applyBulkTag() {{
+  const label = document.getElementById("bulk-tag-label").value.trim();
+  const category = document.getElementById("bulk-tag-cat").value;
+  if (!label) return;
+  pendingBulkKeys.forEach(k => {{
+    TAGS[pendingBulkGroup][k.toUpperCase()] = {{ label, category, notes: "Bulk tagged" }};
+  }});
+  saveTags();
+  closeModal();
+}}
+
+function bulkTagCurrentNetworks() {{
+  openBulkTagModal("networks", lastFilteredNetworks.map(a => a.bssid), "Redes filtradas actualmente");
+}}
+
+function bulkTagCurrentDevices() {{
+  openBulkTagModal("devices", lastFilteredDevices.map(d => d.sta_mac), "Dispositivos filtrados actualmente");
+}}
+
+function bulkTagSetResults() {{
+  const res = computeSetAlgebraResults();
+  if (setAlgState.entity === "devices") {{
+    openBulkTagModal("devices", res.map(d => d.sta_mac), "Dispositivos del resultado de conjuntos");
+  }} else if (setAlgState.entity === "aps") {{
+    openBulkTagModal("networks", res.map(a => a.bssid), "Redes del resultado de conjuntos");
+  }}
 }}
 
 function openSessionEditor(sid) {{
@@ -1779,6 +2185,8 @@ renderAll();
 if (window.location.protocol.startsWith("http")) {{
   const upBtn = document.getElementById("srv-upload-btn");
   if (upBtn) upBtn.style.display = "inline-flex";
+  const hcBtn = document.getElementById("hc22000-dl-btn");
+  if (hcBtn && (DATA.hc22000_lines || []).length > 0) hcBtn.style.display = "inline-flex";
   fetch("/api/tags").then(r => r.ok ? r.json() : null).then(srvTags => {{
     if (srvTags && (srvTags.sessions || srvTags.networks || srvTags.devices)) {{
       TAGS = {{

@@ -21,6 +21,7 @@ from pathlib import Path
 import struct
 import sys
 
+from pcap_audit import TRACE_ORDER, inspect_pcap_files
 from ui_template import render_sigint_dashboard
 
 _OUI_DB = None
@@ -425,7 +426,8 @@ def load_records(paths):
                                 prev["rssi"] = rssi
 
     # Inspeccionar también cualquier fichero .pcap en los mismos directorios o en
-    # las subcarpetas pcap/ adyacentes para enriquecer las trazas PCAP por BSSID y STA.
+    # las subcarpetas pcap/ adyacentes para enriquecer las trazas PCAP por BSSID y STA,
+    # metadatos WPS, códigos Deauth, IE-Fingerprints y handshakes EAPOL/PMKID.
     base_dirs = {p.resolve().parent for p in paths if p.exists()}
     scanned_dirs = set()
     for b_dir in base_dirs:
@@ -434,23 +436,27 @@ def load_records(paths):
         if b_dir.name == "jsonl":
             scanned_dirs.add(b_dir.parent)
             scanned_dirs.add(b_dir.parent / "pcap")
-    pcap_files_seen = set()
+    pcap_files_seen = []
+    seen_rp = set()
     for d_dir in sorted(scanned_dirs):
         if not d_dir.is_dir():
             continue
         for pcap_f in sorted(d_dir.glob("*.pcap")):
             rp = pcap_f.resolve()
-            if rp in pcap_files_seen:
+            if rp in seen_rp:
                 continue
-            pcap_files_seen.add(rp)
-            _parse_pcap_file_into(
-                rp,
-                ap_pcap_traces,
-                ap_pcap_frames,
-                sta_pcap_traces,
-                sta_pcap_frames,
-                promisc_totals,
-            )
+            seen_rp.add(rp)
+            pcap_files_seen.append(rp)
+
+    deep_pcap = inspect_pcap_files(pcap_files_seen)
+    for b_str, tr_set in deep_pcap["ap_pcap_traces"].items():
+        ap_pcap_traces[b_str].update(tr_set)
+    for b_str, cnt in deep_pcap["ap_pcap_frames"].items():
+        ap_pcap_frames[b_str] = max(ap_pcap_frames[b_str], cnt)
+    for s_str, tr_set in deep_pcap["sta_pcap_traces"].items():
+        sta_pcap_traces[s_str].update(tr_set)
+    for s_str, cnt in deep_pcap["sta_pcap_frames"].items():
+        sta_pcap_frames[s_str] = max(sta_pcap_frames[s_str], cnt)
 
     for sta, tr_set in sta_pcap_traces.items():
         if sta in devices:
@@ -473,7 +479,14 @@ def load_records(paths):
         "ap_pcap_frames": ap_pcap_frames,
         "sta_pcap_traces": sta_pcap_traces,
         "sta_pcap_frames": sta_pcap_frames,
-        "pcap_files": [f.name for f in sorted(pcap_files_seen)],
+        "ap_wps_info": deep_pcap["ap_wps_info"],
+        "ap_deauth_reasons": deep_pcap["ap_deauth_reasons"],
+        "ap_eapol_msgs": deep_pcap["ap_eapol_msgs"],
+        "sta_eapol_msgs": deep_pcap["sta_eapol_msgs"],
+        "sta_ie_fp": deep_pcap["sta_ie_fp"],
+        "handshakes": deep_pcap["handshakes"],
+        "hc22000_lines": deep_pcap["hc22000_lines"],
+        "pcap_files": [f.name for f in pcap_files_seen],
     }
     return aps, sightings, set(sessions_meta.keys()), total_scans, promisc_data
 
@@ -487,6 +500,11 @@ def build_intelligence_dataset(aps, sightings, sessions, total_scans, promisc_da
     ap_pcap_frames = promisc_data.get("ap_pcap_frames", {})
     sta_pcap_traces = promisc_data.get("sta_pcap_traces", {})
     sta_pcap_frames = promisc_data.get("sta_pcap_frames", {})
+    ap_wps_info = promisc_data.get("ap_wps_info", {})
+    ap_deauth_reasons = promisc_data.get("ap_deauth_reasons", {})
+    ap_eapol_msgs = promisc_data.get("ap_eapol_msgs", {})
+    sta_eapol_msgs = promisc_data.get("sta_eapol_msgs", {})
+    sta_ie_fp = promisc_data.get("sta_ie_fp", {})
 
     def _sort_traces(tr_set):
         return sorted(tr_set, key=lambda x: TRACE_ORDER.index(x) if x in TRACE_ORDER else 99)
@@ -534,6 +552,9 @@ def build_intelligence_dataset(aps, sightings, sessions, total_scans, promisc_da
             "cluster_size": len(ssid_to_bssids.get(ssid, [])) if ssid else 1,
             "pcap_traces": _sort_traces(ap_pcap_traces.get(bssid, set())),
             "pcap_frames": int(ap_pcap_frames.get(bssid, 0)),
+            "wps_info": ap_wps_info.get(bssid, {}),
+            "deauth_reasons": ap_deauth_reasons.get(bssid, []),
+            "eapol_msgs": ap_eapol_msgs.get(bssid, []),
         }
         ap_list.append(item)
         ap_by_bssid[bssid] = item
@@ -565,6 +586,8 @@ def build_intelligence_dataset(aps, sightings, sessions, total_scans, promisc_da
             "matched_local_ssids": matched_local,
             "pcap_traces": _sort_traces(d.get("pcap_traces", set()) | sta_pcap_traces.get(sta, set())),
             "pcap_frames": int(sta_pcap_frames.get(sta, 0)),
+            "ie_fingerprint": sta_ie_fp.get(sta, ""),
+            "eapol_msgs": sta_eapol_msgs.get(sta, []),
         }
         dev_list.append(item)
         device_by_mac[sta] = item
@@ -595,6 +618,8 @@ def build_intelligence_dataset(aps, sightings, sessions, total_scans, promisc_da
             "pcap_bytes": int(promisc_data["totals"]["pcap_bytes"]),
         },
         "pcap_files": promisc_data.get("pcap_files", []),
+        "handshakes": promisc_data.get("handshakes", []),
+        "hc22000_lines": promisc_data.get("hc22000_lines", []),
         "channel_counts": {str(k): v for k, v in ch_counts.items()},
         "auth_counts": dict(auth_counts.most_common()),
         "ssid_collisions": ssid_collisions,

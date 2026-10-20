@@ -20,12 +20,19 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import ssl
+import subprocess
 import tempfile
 import threading
 from urllib.parse import parse_qs, urlparse
 
+from dual_socket import DualModeServerMixin
 import engine
 from validator import now_iso_ms, validate_scan_payload
+
+
+class DualThreadingHTTPServer(DualModeServerMixin, ThreadingHTTPServer):
+    pass
 
 MAX_UPLOAD_BYTES = 32 * 1024 * 1024
 
@@ -135,6 +142,8 @@ def make_handler(hub: HubState):
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(data)))
+            # Limpiar cualquier caché HSTS previa en el navegador para este origen
+            self.send_header("Strict-Transport-Security", "max-age=0")
             if extra_headers:
                 for k, v in extra_headers.items():
                     self.send_header(k, v)
@@ -248,16 +257,65 @@ def make_handler(hub: HubState):
     return Handler
 
 
+def _ensure_self_signed_cert(cert_dir: Path) -> tuple[Path, Path]:
+    cert_dir.mkdir(parents=True, exist_ok=True)
+    cert_file = cert_dir / "localhost.crt"
+    key_file = cert_dir / "localhost.key"
+    if not cert_file.exists() or not key_file.exists():
+        subprocess.run(
+            [
+                "openssl", "req", "-x509", "-nodes", "-newkey", "rsa:2048",
+                "-keyout", str(key_file),
+                "-out", str(cert_file),
+                "-days", "3650",
+                "-subj", "/CN=localhost",
+                "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:192.168.1.142",
+            ],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    return cert_file, key_file
+
+
 def main():
     parser = argparse.ArgumentParser(description="SIGINT-Console — Servidor de Inteligencia Inalámbrica")
     parser.add_argument("--host", default=os.environ.get("SIGINT_HOST", "0.0.0.0"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("SIGINT_PORT", "8080")))
+    parser.add_argument("--https-port", type=int, default=int(os.environ.get("SIGINT_HTTPS_PORT", "8443")))
     parser.add_argument("--data", type=Path, default=Path(os.environ.get("SIGINT_DATA_DIR", "/data")))
     args = parser.parse_args()
 
     hub = HubState(data_dir=args.data)
-    server = ThreadingHTTPServer((args.host, args.port), make_handler(hub))
-    print(f"📡 SIGINT-Console activo en http://{args.host}:{server.server_address[1]} (data={args.data})")
+    handler_cls = make_handler(hub)
+
+    tls_ctx = None
+    try:
+        cert_file, key_file = _ensure_self_signed_cert(args.data / ".certs")
+        if cert_file.exists() and key_file.exists():
+            tls_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            tls_ctx.load_cert_chain(certfile=str(cert_file), keyfile=str(key_file))
+    except Exception as exc:
+        print(f"[warn] No se pudo preparar contexto TLS: {exc}")
+
+    server = DualThreadingHTTPServer((args.host, args.port), handler_cls)
+    server.tls_context = tls_ctx
+    print(f"📡 SIGINT-Console Dual HTTP/HTTPS activo en http://127.0.0.1:{server.server_address[1]} y https://localhost:{server.server_address[1]} (data={args.data})")
+
+    # Levantar también listener HTTPS opcional en 8443 por si el navegador fuerza HTTPS
+    if args.https_port > 0:
+        try:
+            cert_file, key_file = _ensure_self_signed_cert(args.data / ".certs")
+            if cert_file.exists() and key_file.exists():
+                https_srv = ThreadingHTTPServer((args.host, args.https_port), handler_cls)
+                ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+                ctx.load_cert_chain(certfile=str(cert_file), keyfile=str(key_file))
+                https_srv.socket = ctx.wrap_socket(https_srv.socket, server_side=True)
+                threading.Thread(target=https_srv.serve_forever, daemon=True).start()
+                print(f"🔒 SIGINT-Console HTTPS activo en https://localhost:{args.https_port}")
+        except Exception as exc:
+            print(f"[warn] HTTPS opcional no iniciado: {exc}")
+
     try:
         server.serve_forever()
     except KeyboardInterrupt:

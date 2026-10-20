@@ -14,37 +14,37 @@
 
 ---
 
-**SIGINT-Console** es la plataforma central de análisis, correlación multi-sesión y auditoría de espectro diseñada como el **cerebro de inteligencia** para los sensores hardware del repositorio [**kta41/ESP32_projects**](https://github.com/kta41/ESP32_projects):
+**SIGINT-Console** is the centralized wireless intelligence, multi-session correlation, and spectrum-auditing web platform built as the **analysis brain** for the hardware sensors in [**kta41/ESP32_projects**](https://github.com/kta41/ESP32_projects):
 
-| Sensor Hardware (`ESP32_projects`) | Estado | Telemetría Ingerida |
+| Hardware Sensor (`ESP32_projects`) | Status | Ingested Telemetry |
 | :--- | :--- | :--- |
-| [**`Wifi-Wardriving`**](https://github.com/kta41/ESP32_projects/tree/main/Wifi-Wardriving) | ✅ **Activo** | Barrido pasivo 802.11 + modo promiscuo (`MGMT`/`DATA`), estaciones clientes (`ToDS`/`FromDS`), huella PNL (*Probe Requests*) y tramas `Deauth`/`Disassoc`. |
-| [**`BLE-Recon`**](https://github.com/kta41/ESP32_projects/tree/main/BLE-Recon) | 🔜 *Roadmap* | Balizas Bluetooth Low Energy (iBeacon, Eddystone, Apple FindMy / AirTag) y correlación temporal con clientes Wi-Fi. |
-| [**`ESP32-RF-Lab`**](https://github.com/kta41/ESP32_projects/tree/main/ESP32-RF-Lab) | 🔜 *Roadmap* | Ocupación espectral 2,4 GHz / Sub-GHz y telemetría de nivel físico. |
+| [**`Wifi-Wardriving`**](https://github.com/kta41/ESP32_projects/tree/main/Wifi-Wardriving) | ✅ **Active** | Passive 802.11 channel sweeps + simultaneous promiscuous sniffing (`MGMT`/`DATA`), associated client stations (`ToDS`/`FromDS`), Probe Request PNLs, and `Deauth`/`Disassoc` frame counters. |
+| [**`BLE-Recon`**](https://github.com/kta41/ESP32_projects/tree/main/BLE-Recon) | 🔜 *Planned* | Bluetooth Low Energy beacons (iBeacon, Eddystone, Apple FindMy / AirTag) and cross-protocol temporal correlation with Wi-Fi clients. |
+| [**`ESP32-RF-Lab`**](https://github.com/kta41/ESP32_projects/tree/main/ESP32-RF-Lab) | 🔜 *Planned* | 2.4 GHz / Sub-GHz spectrum occupancy and physical-layer link metrics. |
 
 ---
 
-## 🧠 Capacidades de Inteligencia
+## 🧠 Intelligence Capabilities
 
-1. **Resumen Ejecutivo & Postura de Exposición RF (`0–100`)**:
-   - Evaluación automática de protocolos obsoletos (`OPEN`, `WEP`, `WPA1`, `TKIP` — *Beck-Tews / ChopChop*), exposición de **WPS** (*Pixie-Dust / PIN*), redes ocultas (*SSID Cloaking*) y colisiones Multi-BSSID / posibles *Evil Twins*.
-2. **Dossier de Redes e Infraestructura (`BSSID` / Clusters `SSID`)**:
-   - Filtro instantáneo de **`⚠️ Redes No Seguras`** con explicación técnica detallada por vulnerabilidad y severidad (`CRÍTICO`, `ALTO`, `MEDIO`, `INFO`).
-   - Correlación de qué estaciones clientes están traficando datos en cada AP y qué dispositivos externos están buscando ese SSID.
-3. **Inteligencia de Dispositivos Clientes (`STA MAC` & Huella PNL)**:
-   - Asocia cada dispositivo con los puntos de acceso a los que se conecta y con la lista de redes que busca mediante *Probe Requests* (distinguiendo redes presentes en el entorno frente a redes remotas guardadas en el dispositivo).
-4. **Base de Datos IEEE OUI Completa (`40.355` prefijos, España + Global)**:
-   - Identificación offline de los fabricantes de móviles más usados en España (`Apple`, `Samsung`, `Xiaomi/Redmi/POCO`, `Huawei`, `Honor`, `OPPO`, `realme`, `OnePlus`, `Google Pixel`, `Motorola`), routers de operadoras (`Arcadyan`, `MitraStar`, `Askey`, `Sagemcom`, `Sercomm`, `ZTE`, `TP-Link`, `Mercusys`) e IoT (`Espressif`, `Tuya`, `Amazon`, `Shelly`).
-   - Desenmascarado automático de **BSSIDs virtuales** (bit `Locally-Administered` invertido sobre un OUI real) frente a **MACs aleatorias de privacidad (iOS/Android)**.
-5. **Persistencia Multi-Sesión (Cross-Session Tracking)**:
-   - Detecta qué dispositivos (`STA MAC`) o puntos de acceso reaparecen en múltiples sesiones de captura distintas.
-6. **Gestión de Sesiones, GPS por Sesión y Etiquetado Persistente (`tags.json`)**:
-   - Permite nombrar sesiones, asignarles coordenadas GPS y etiquetar dispositivos o redes con nombres personalizados (`PROPIO`, `CONOCIDO`, `OBJETIVO`, `SOSPECHOSO`, `IGNORAR`).
-   - Cuando corre como servicio Docker/HTTP, cualquier cambio de etiqueta se guarda automáticamente en `/data/tags.json` a través de `POST /api/tags`.
+1. **Executive Summary & RF Exposure Posture Score (`0–100`)**:
+   - Automated assessment of legacy/weak encryption (`OPEN`, `WEP`, `WPA1`, `TKIP` — *Beck-Tews / ChopChop*), exposed **WPS** (*Pixie-Dust / brute-force PIN*), hidden networks (*SSID Cloaking*), and Multi-BSSID collisions / potential *Evil Twins*.
+2. **Network & Infrastructure Dossiers (`BSSID` / `SSID` Clusters)**:
+   - One-click **`⚠️ Insecure Networks`** filter with per-network vulnerability breakdowns and severity ratings (`CRITICAL`, `HIGH`, `MEDIUM`, `INFO`).
+   - Correlates which client stations are actively exchanging frames on each AP and which nearby devices are probing for that SSID.
+3. **Client Device Intelligence (`STA MAC` & PNL Fingerprinting)**:
+   - Links every client station to the APs it associates with and the list of networks it searches for via *Probe Requests* (highlighting whether a probed SSID is physically present in the audited environment or a remote profile).
+4. **Complete IEEE OUI Database (`40,355` prefixes, Spain + Global)**:
+   - Offline vendor resolution covering major mobile brands (`Apple`, `Samsung`, `Xiaomi/Redmi/POCO`, `Huawei`, `Honor`, `OPPO`, `realme`, `OnePlus`, `Google Pixel`, `Motorola`), ISP CPE routers (`Arcadyan`, `MitraStar`, `Askey`, `Sagemcom`, `Sercomm`, `ZTE`, `TP-Link`, `Mercusys`), and IoT hardware (`Espressif`, `Tuya`, `Amazon`, `Shelly`).
+   - Automatic unmasking of **virtual BSSIDs** (locally-administered bit flipped over a registered IEEE OUI) vs. **randomized privacy MACs (iOS/Android)**.
+5. **Cross-Session Persistence Tracking**:
+   - Highlights client devices (`STA MAC`) and access points (`BSSID`) observed across multiple independent capture sessions.
+6. **Session Management, Session-Level GPS & Persistent Entity Tagging (`tags.json`)**:
+   - Assign custom names and GPS coordinates (`lat, lon`) to capture sessions, and tag devices or networks (`PROPIO`, `CONOCIDO`, `OBJETIVO`, `SOSPECHOSO`, `IGNORAR`) with one-click reset to default identifiers.
+   - When running via Docker/HTTP, all tag edits are automatically persisted to `/data/tags.json` via `POST /api/tags`.
 
 ---
 
-## 🐳 Despliegue Rápido con Docker
+## 🐳 Quick Start with Docker
 
 ```bash
 git clone https://github.com/kta41/SIGINT-Console.git
@@ -52,52 +52,54 @@ cd SIGINT-Console
 docker compose up -d --build
 ```
 
-Abre en tu navegador: **`http://localhost:8080`**
+Open in your browser:
+- **`http://127.0.0.1:8080`** (or **`http://192.168.1.142:8080`** on LAN — using `127.0.0.1` instead of `localhost` avoids browser HSTS / forced-HTTPS certificate errors).
 
-### Cómo importar capturas `.jsonl` al servicio
+### Importing `.jsonl` Captures
 
-1. **Desde el propio navegador web (`http://localhost:8080`)**:
-   - Haz clic en el botón superior **`📥 Importar .JSONL al Servidor`** y selecciona uno o varios ficheros `wardrive_*.jsonl` (o arrastra tu `tags.json`).
-2. **Copiando los archivos a la carpeta `./data/`**:
-   - Cualquier fichero `.jsonl` en `./data/` es leído y correlacionado en caliente al recargar la página (puedes sincronizar directo desde el móvil con `warpull ./data` desde `ESP32_projects/Wifi-Wardriving`).
-3. **Por API HTTP (`curl` o push directo del sensor)**:
+1. **Directly from the Web UI (`http://127.0.0.1:8080`)**:
+   - Click **`📥 Importar .JSONL al Servidor`** in the top bar and select one or more `wardrive_*.jsonl` files (or import a `tags.json` file).
+2. **Dropping files into `./data/`**:
+   - Any `.jsonl` file placed in `./data/` is automatically parsed and correlated on page reload (automatically synced when running `warpull` from `ESP32_projects/Wifi-Wardriving`).
+3. **Via HTTP API (`curl` or direct sensor push)**:
    ```bash
-   curl -X POST "http://localhost:8080/api/import?filename=sesion_auditoria.jsonl" \
+   curl -X POST "http://127.0.0.1:8080/api/import?filename=audit_session.jsonl" \
         -H "Content-Type: application/x-ndjson" \
         --data-binary @wardrive_20261020_1313.jsonl
    ```
 
 ---
 
-## 🔌 Endpoints de la API
+## 🔌 HTTP API Endpoints
 
-| Método | Ruta | Descripción |
+| Method | Path | Description |
 | :--- | :--- | :--- |
-| `GET` | `/` | Consola Web SIGINT interactiva renderizada con los datos actuales de `/data`. |
-| `GET` | `/api/dataset` | Dataset JSON completo ya correlacionado (APs, STAs, PNL, sesiones, vulnerabilidades). |
-| `GET` | `/api/tags` | Devuelve el diccionario activo de etiquetas (`sessions`, `networks`, `devices`). |
-| `POST` | `/api/tags` | Persiste cambios de etiquetas/nombres/GPS directamente en `/data/tags.json`. |
-| `POST` | `/api/import` | Importa y valida líneas JSONL v1 en `/data/`. |
-| `POST` | `/scans` | Endpoint compatible con el push directo del firmware ESP32-S3 (`Wifi-Wardriving`). |
-| `GET` | `/export/csv` | Descarga el catálogo único de BSSIDs en CSV. |
-| `GET` | `/export/wigle` | Descarga las redes en formato oficial **WiGLE CSV v1.4**. |
-| `GET` | `/health` | Estado del contenedor y lista de ficheros cargados. |
+| `GET` | `/` | Live SIGINT Web Console rendered from all `.jsonl` files in `/data`. |
+| `GET` | `/api/dataset` | Full correlated intelligence dataset in JSON format. |
+| `GET` | `/api/tags` | Returns active entity tags (`sessions`, `networks`, `devices`). |
+| `POST` | `/api/tags` | Persists tag/alias/session GPS changes directly to `/data/tags.json`. |
+| `POST` | `/api/import` | Validates and imports JSONL v1 lines into `/data/`. |
+| `POST` | `/scans` | Native ESP32-S3 batch push endpoint compatible with `Wifi-Wardriving`. |
+| `GET` | `/export/csv` | Downloads the deduplicated BSSID catalog as CSV. |
+| `GET` | `/export/wigle` | Downloads networks in official **WiGLE CSV v1.4** format. |
+| `GET` | `/health` | Container health status and loaded file list. |
 
 ---
 
-## 💻 Ejecución sin Docker (Python 3stdlib pura)
+## 💻 Running Without Docker (Pure Python 3 Standard Library)
 
-No requiere instalar paquetes con `pip` (usa exclusivamente la librería estándar de Python 3):
+No third-party `pip` packages are required:
 
 ```bash
 python3 app/server.py --host 0.0.0.0 --port 8080 --data ./data
 ```
 
-O en modo CLI / generador estático:
+Or as a standalone static report generator:
 
 ```bash
 python3 app/engine.py ./data/wardrive_*.jsonl \
-    --csv ./data/redes.csv \
+    --csv ./data/networks.csv \
     --wigle ./data/wigle.csv \
     --html ./data/dashboard.html
 ```
+

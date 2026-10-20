@@ -403,7 +403,7 @@ code, .mono {{
     </div>
   </div>
   <div class="top-actions no-print">
-    <label class="btn btn-primary" id="srv-upload-btn" style="display:none">📥 Importar .JSONL al Servidor <input type="file" accept=".jsonl,.json,.ndjson" multiple style="display:none" onchange="uploadJsonlFiles(event)"></label>
+    <label class="btn btn-primary" id="srv-upload-btn" style="display:none">📥 Importar .JSONL / .PCAP <input type="file" accept=".jsonl,.json,.ndjson,.pcap" multiple style="display:none" onchange="uploadJsonlFiles(event)"></label>
     <button onclick="openTagManagerModal()">🏷️ Nuevo Tag / Alias</button>
     <button onclick="exportTagsJson()">💾 Exportar tags.json</button>
     <label class="btn">📂 Importar tags.json <input type="file" accept=".json" style="display:none" onchange="importTagsJson(event)"></label>
@@ -457,6 +457,8 @@ code, .mono {{
           <span class="chip" onclick="setNetFilter('insecure', this)" style="border-color:rgba(239,68,68,0.45);color:#f87171">⚠️ Redes No Seguras (OPEN/WEP/TKIP/WPS)</span>
           <span class="chip" onclick="setNetFilter('weak', this)">Cifrado Débil (OPEN/WEP/TKIP)</span>
           <span class="chip" onclick="setNetFilter('wps', this)">WPS Expuesto</span>
+          <span class="chip" onclick="setNetFilter('pcap', this)" style="border-color:rgba(16,185,129,0.45);color:#34d399">📦 Con Trazas PCAP</span>
+          <span class="chip" onclick="setNetFilter('eapol', this)" style="border-color:rgba(245,158,11,0.55);color:#fbbf24">🔑 Handshake EAPOL</span>
           <span class="chip" onclick="setNetFilter('multi', this)">Multi-Sesión (&ge;2)</span>
           <span class="chip" onclick="setNetFilter('clients', this)">Con Clientes Activos</span>
           <span class="chip" onclick="setNetFilter('probed', this)">Buscadas por STAs</span>
@@ -476,6 +478,7 @@ code, .mono {{
               <th>Tag / Alias</th>
               <th>Seguridad</th>
               <th>WPS</th>
+              <th>Trazas PCAP</th>
               <th>Clientes (STAs)</th>
               <th>Buscada por</th>
               <th>Sesiones</th>
@@ -501,6 +504,8 @@ code, .mono {{
         <div class="chip-group" id="dev-chips">
           <span class="chip active" onclick="setDevFilter('all', this)">Todos</span>
           <span class="chip" onclick="setDevFilter('insecure_ap', this)" style="border-color:rgba(239,68,68,0.45);color:#f87171">⚠️ En Red No Segura</span>
+          <span class="chip" onclick="setDevFilter('pcap', this)" style="border-color:rgba(16,185,129,0.45);color:#34d399">📦 Con Trazas PCAP</span>
+          <span class="chip" onclick="setDevFilter('eapol', this)" style="border-color:rgba(245,158,11,0.55);color:#fbbf24">🔑 Handshake EAPOL</span>
           <span class="chip" onclick="setDevFilter('multi', this)">Recurrentes (&ge;2 sesiones)</span>
           <span class="chip" onclick="setDevFilter('associated', this)">Asociados a un AP</span>
           <span class="chip" onclick="setDevFilter('probing', this)">Buscando Redes (PNL)</span>
@@ -519,6 +524,7 @@ code, .mono {{
               <th>Tipo MAC / Fabricante</th>
               <th>Asociado a AP (BSSID / SSID)</th>
               <th>Redes que Busca (Probe Requests PNL)</th>
+              <th>Trazas PCAP</th>
               <th>Tramas</th>
               <th>Sesiones Visto</th>
               <th class="no-print">Acción</th>
@@ -559,6 +565,7 @@ code, .mono {{
               <th>Escaneos</th>
               <th>APs Únicos</th>
               <th>Clientes (STAs)</th>
+              <th>Archivo PCAP</th>
               <th>GPS de la Sesión (Lat, Lon)</th>
               <th class="no-print">Editar</th>
             </tr>
@@ -633,17 +640,21 @@ function saveTags() {{
 async function uploadJsonlFiles(ev) {{
   const files = Array.from(ev.target.files || []);
   if (!files.length) return;
-  let totalLines = 0;
   for (const f of files) {{
-    const text = await f.text();
-    const res = await fetch("/api/import?filename=" + encodeURIComponent(f.name), {{
-      method: "POST",
-      headers: {{ "Content-Type": "application/x-ndjson" }},
-      body: text
-    }});
-    if (res.ok) {{
-      const j = await res.json();
-      totalLines += (j.imported || j.accepted || 0);
+    if (f.name.toLowerCase().endsWith(".pcap")) {{
+      const buf = await f.arrayBuffer();
+      await fetch("/api/import_pcap?filename=" + encodeURIComponent(f.name), {{
+        method: "POST",
+        headers: {{ "Content-Type": "application/octet-stream" }},
+        body: buf
+      }});
+    }} else {{
+      const text = await f.text();
+      await fetch("/api/import?filename=" + encodeURIComponent(f.name), {{
+        method: "POST",
+        headers: {{ "Content-Type": "application/x-ndjson" }},
+        body: text
+      }});
     }}
   }}
   window.location.reload();
@@ -693,6 +704,28 @@ function renderTagBadge(tagObj) {{
   const cls = catBadgeClass(tagObj.category);
   const cat = tagObj.category ? `[${{esc(tagObj.category)}}] ` : "";
   return `<span class="badge ${{cls}}">${{cat}}${{esc(tagObj.label)}}</span>`;
+}}
+
+function renderPcapTracesBadges(traces, framesCount) {{
+  const arr = Array.isArray(traces) ? traces : [];
+  if (arr.length === 0) return '<span style="color:var(--muted)">—</span>';
+  const badgeMap = {{
+    EAPOL:      {{ cls: "b-target",     label: "🔑 EAPOL",      tip: "Handshake WPA/WPA2/WPA3 (EAPOL 0x888E) capturado en PCAP" }},
+    DEAUTH:     {{ cls: "b-suspicious", label: "⚡ DEAUTH",     tip: "Trama Deauthentication / Disassociation capturada en PCAP" }},
+    ASSOC:      {{ cls: "b-own",        label: "🔗 ASSOC",      tip: "Association / Reassociation Req/Resp capturada en PCAP" }},
+    AUTH:       {{ cls: "b-own",        label: "🛡️ AUTH",       tip: "Trama Authentication 802.11 capturada en PCAP" }},
+    PROBE_REQ:  {{ cls: "b-known",      label: "📡 PROBE_REQ",  tip: "Probe Request de cliente capturada en PCAP" }},
+    PROBE_RESP: {{ cls: "b-known",      label: "📶 PROBE_RESP", tip: "Probe Response de AP capturada en PCAP" }},
+    ACTION:     {{ cls: "b-multi",      label: "⚙️ ACTION",     tip: "Trama 802.11 Action (802.11k/v/w, BlockAck) capturada en PCAP" }},
+    BEACON:     {{ cls: "b-neutral",    label: "📻 BEACON",     tip: "Baliza 802.11 Beacon con IEs RSN/WPS completos en PCAP" }},
+    DATA:       {{ cls: "b-neutral",    label: "📦 DATA",       tip: "Trama de datos 802.11 capturada en PCAP" }},
+  }};
+  const html = arr.map(t => {{
+    const m = badgeMap[t] || {{ cls: "b-neutral", label: t, tip: "Traza PCAP: " + t }};
+    return `<span class="badge ${{m.cls}}" title="${{esc(m.tip)}}" style="margin:1px 2px 1px 0">${{m.label}}</span>`;
+  }}).join("");
+  const cnt = framesCount ? ` <span class="mono" style="color:var(--muted);font-size:11px">(${{framesCount}} pkts)</span>` : "";
+  return `<div style="display:flex;flex-wrap:wrap;align-items:center;gap:2px">${{html}}${{cnt}}</div>`;
 }}
 
 function rssiBar(rssi) {{
@@ -753,9 +786,9 @@ function renderOverview() {{
       <div class="kpi-sub">${{DATA.total_scans}} escaneos pasivos + promiscuos</div>
     </div>
     <div class="kpi">
-      <div class="kpi-label">Tramas 802.11 / Deauth</div>
+      <div class="kpi-label">Tramas 802.11 / PCAP</div>
       <div class="kpi-val">${{DATA.totals.mgmt_frames + DATA.totals.data_frames}}</div>
-      <div class="kpi-sub">Deauth/Disassoc vistas: <b style="color:${{DATA.totals.deauth_frames ? 'var(--red)' : 'var(--green)'}}">${{DATA.totals.deauth_frames}}</b></div>
+      <div class="kpi-sub">PCAP: <b style="color:var(--accent)">${{DATA.totals.pcap_frames || 0}}</b> · EAPOL: <b style="color:${{(DATA.totals.eapol_frames || 0) ? 'var(--amber)' : 'var(--muted)'}}">${{DATA.totals.eapol_frames || 0}}</b> · Deauth: <b style="color:${{DATA.totals.deauth_frames ? 'var(--red)' : 'var(--green)'}}">${{DATA.totals.deauth_frames}}</b></div>
     </div>
   `;
 
@@ -890,8 +923,11 @@ function renderNetworksTable() {{
 
   const filtered = DATA.aps.filter(ap => {{
     const tag = getNetworkTag(ap.bssid, ap.ssid);
+    const traces = ap.pcap_traces || [];
     if (sesFilter && !ap.sessions.includes(sesFilter)) return false;
     if (netFilter === "insecure" && !ap.is_weak && !ap.wps) return false;
+    if (netFilter === "pcap" && traces.length === 0) return false;
+    if (netFilter === "eapol" && !traces.includes("EAPOL")) return false;
     if (netFilter === "multi" && ap.sessions.length < 2) return false;
     if (netFilter === "clients" && ap.clients.length === 0) return false;
     if (netFilter === "probed" && ap.probing_stas.length === 0) return false;
@@ -903,7 +939,8 @@ function renderNetworksTable() {{
     if (!q) return true;
     const hay = [
       ap.ssid, ap.bssid, ap.vendor, ap.auth_mode, ap.pairwise_cipher,
-      "ch" + ap.primary_channel, tag ? tag.label : "", tag ? tag.category : ""
+      "ch" + ap.primary_channel, tag ? tag.label : "", tag ? tag.category : "",
+      ...traces
     ].join(" ").toLowerCase();
     return hay.includes(q);
   }});
@@ -966,6 +1003,7 @@ function renderNetworksTable() {{
       <td>${{renderTagBadge(tag)}}</td>
       <td><span class="mono" style="${{secStyle}}">${{esc(ap.auth_mode)}} / ${{esc(ap.pairwise_cipher)}}</span>${{vulnReasonsHtml}}</td>
       <td>${{wpsBadge}}</td>
+      <td>${{renderPcapTracesBadges(ap.pcap_traces, ap.pcap_frames)}}</td>
       <td>${{stasHtml}}</td>
       <td>${{probedHtml}}</td>
       <td>${{sesBadge}}</td>
@@ -977,7 +1015,7 @@ function renderNetworksTable() {{
   }});
 
   document.getElementById("net-tbody").innerHTML = rows.join("") ||
-    `<tr><td colspan="12" style="text-align:center;color:var(--muted);padding:24px">Sin resultados con los filtros actuales.</td></tr>`;
+    `<tr><td colspan="13" style="text-align:center;color:var(--muted);padding:24px">Sin resultados con los filtros actuales.</td></tr>`;
 }}
 
 function setDevFilter(f, el) {{
@@ -992,6 +1030,7 @@ function renderDevicesTable() {{
 
   const filtered = DATA.devices.filter(d => {{
     const tag = getDeviceTag(d.sta_mac);
+    const traces = d.pcap_traces || [];
     if (devFilter === "insecure_ap") {{
       const onInsecure = d.associated_bssids.some(b => {{
         const ap = DATA.ap_by_bssid[b];
@@ -999,6 +1038,8 @@ function renderDevicesTable() {{
       }});
       if (!onInsecure) return false;
     }}
+    if (devFilter === "pcap" && traces.length === 0) return false;
+    if (devFilter === "eapol" && !traces.includes("EAPOL")) return false;
     if (devFilter === "multi" && d.sessions.length < 2) return false;
     if (devFilter === "associated" && d.associated_bssids.length === 0) return false;
     if (devFilter === "probing" && d.probed_ssids.length === 0) return false;
@@ -1012,6 +1053,7 @@ function renderDevicesTable() {{
       ...d.probed_ssids,
       ...d.associated_bssids,
       ...d.associated_ssids,
+      ...traces,
       tag ? tag.label : "", tag ? tag.category : ""
     ].join(" ").toLowerCase();
     return hay.includes(q);
@@ -1053,6 +1095,7 @@ function renderDevicesTable() {{
       <td>${{macType}}</td>
       <td>${{assocHtml}}</td>
       <td>${{probesHtml}}</td>
+      <td>${{renderPcapTracesBadges(d.pcap_traces, d.pcap_frames)}}</td>
       <td class="mono">${{d.total_frames}}</td>
       <td>${{sesHtml}}</td>
       <td class="no-print">
@@ -1062,7 +1105,7 @@ function renderDevicesTable() {{
   }});
 
   document.getElementById("dev-tbody").innerHTML = rows.join("") ||
-    `<tr><td colspan="9" style="text-align:center;color:var(--muted);padding:24px">Todavía no hay dispositivos clientes que coincidan con este filtro. Deja correr el modo promiscuo unos ciclos y ejecuta <code>warpull</code>.</td></tr>`;
+    `<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:24px">Todavía no hay dispositivos clientes que coincidan con este filtro. Deja correr el modo promiscuo unos ciclos y ejecuta <code>warpull</code>.</td></tr>`;
 }}
 
 function renderCrossSession() {{
@@ -1117,6 +1160,13 @@ function renderSessionsTable() {{
       ? `<a class="entity-link mono" target="_blank" href="https://www.openstreetmap.org/?mlat=${{gps.lat}}&mlon=${{gps.lon}}#map=17/${{gps.lat}}/${{gps.lon}}">📍 ${{Number(gps.lat).toFixed(5)}}, ${{Number(gps.lon).toFixed(5)}}</a>`
       : `<span style="color:var(--muted)">Sin fijar</span>`;
 
+    const matchingPcap = (DATA.pcap_files || []).find(pf => pf.includes(s.session_id));
+    const pcapHtml = matchingPcap
+      ? (window.location.protocol.startsWith("http")
+          ? `<a class="entity-link mono" href="/export/pcap/${{encodeURIComponent(matchingPcap)}}">📦 ${{esc(matchingPcap)}}</a>`
+          : `<span class="badge b-known mono">📦 ${{esc(matchingPcap)}}</span>`)
+      : `<span style="color:var(--muted)">—</span>`;
+
     return `<tr>
       <td class="mono"><b>${{s.session_id}}</b></td>
       <td>${{st.name ? `<span class="badge b-own">${{esc(st.name)}}</span>` : '<span style="color:var(--muted)">Sin nombre</span>'}}</td>
@@ -1125,6 +1175,7 @@ function renderSessionsTable() {{
       <td class="mono">${{s.scans}}</td>
       <td class="mono">${{s.unique_aps}}</td>
       <td class="mono">${{s.unique_clients}}</td>
+      <td>${{pcapHtml}}</td>
       <td>${{gpsHtml}}</td>
       <td class="no-print">
         <button onclick="openSessionEditor('${{s.session_id}}')">✏️ Nombrar / GPS</button>
@@ -1221,6 +1272,7 @@ function openApDossier(bssid) {{
       <div class="kv"><div class="kv-k">Seguridad / Cifrado</div><div class="kv-v">${{esc(ap.auth_mode)}} / ${{esc(ap.pairwise_cipher)}}</div></div>
       <div class="kv"><div class="kv-k">WPS / Oculta</div><div class="kv-v">WPS: ${{ap.wps ? "SÍ" : "NO"}} · Oculta: ${{ap.hidden ? "SÍ" : "NO"}}</div></div>
       <div class="kv"><div class="kv-k">Señal Máx / Visto</div><div class="kv-v">${{ap.rssi}} dBm (${{ap.sightings}} veces)</div></div>
+      <div class="kv"><div class="kv-k">Trazas en PCAP</div><div class="kv-v">${{renderPcapTracesBadges(ap.pcap_traces, ap.pcap_frames)}}</div></div>
     </div>
     <h4>Evaluación de Seguridad y Vulnerabilidades Detectadas</h4>
     ${{(() => {{
@@ -1356,6 +1408,7 @@ function openDeviceDossier(mac) {{
       <div class="kv"><div class="kv-k">Tipo MAC / OUI</div><div class="kv-v">${{d.is_randomized ? "MAC Aleatoria (Privacidad)" : esc(d.vendor)}}</div></div>
       <div class="kv"><div class="kv-k">Señal Máx / Canal</div><div class="kv-v">${{d.rssi}} dBm (CH ${{d.channel}})</div></div>
       <div class="kv"><div class="kv-k">Tramas Capturadas</div><div class="kv-v">${{d.total_frames}} tramas</div></div>
+      <div class="kv"><div class="kv-k">Trazas en PCAP</div><div class="kv-v">${{renderPcapTracesBadges(d.pcap_traces, d.pcap_frames)}}</div></div>
       <div class="kv"><div class="kv-k">Persistencia</div><div class="kv-v">${{d.sessions.length}} sesiones (${{d.sessions.map(getSessionDisplay).map(esc).join(", ")}})</div></div>
     </div>
     <h4>Puntos de Acceso a los que se ha asociado (${{d.associated_bssids.length}})</h4>

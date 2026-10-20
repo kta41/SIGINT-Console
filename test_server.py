@@ -117,6 +117,22 @@ class SigintConsoleServerTests(unittest.TestCase):
             self.assertIn("Samsung Electronics", html)
             self.assertIn("Planta 1", html)
 
+        # Verificar que reimportar el mismo JSONL deduplica al 100 %
+        req_dup = Request(
+            f"{self.url}/api/sync/push?filename=wardrive_test.jsonl",
+            data=body,
+            headers={"Content-Type": "application/x-ndjson"},
+        )
+        with urlopen(req_dup) as resp:
+            res_dup = json.loads(resp.read())
+            self.assertEqual(res_dup["imported"], 0)
+            self.assertEqual(res_dup["skipped_duplicates"], 1)
+
+        with urlopen(f"{self.url}/api/sync/status") as resp:
+            st = json.loads(resp.read())
+            self.assertEqual(st["magic"], "SIGINT-CONSOLE-V1")
+            self.assertEqual(st["sessions"]["9f3a21c4"]["max_scan_id"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

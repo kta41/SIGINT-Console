@@ -18,6 +18,7 @@ from datetime import datetime
 import gzip
 import json
 from pathlib import Path
+import struct
 import sys
 
 from ui_template import render_sigint_dashboard
@@ -109,6 +110,135 @@ def load_tags_file(paths) -> tuple[dict, Path]:
     return {"sessions": {}, "networks": {}, "devices": {}}, default_path
 
 
+TRACE_ORDER = ["EAPOL", "DEAUTH", "ASSOC", "AUTH", "PROBE_REQ", "PROBE_RESP", "ACTION", "BEACON"]
+
+
+def _fmt_mac(b: bytes) -> str:
+    return ":".join(f"{x:02X}" for x in b)
+
+
+def _is_mcast_or_zero(b: bytes) -> bool:
+    if not b or len(b) < 6:
+        return True
+    if (b[0] & 0x01) != 0:
+        return True
+    return b == b"\x00\x00\x00\x00\x00\x00"
+
+
+def _parse_pcap_file_into(pcap_path: Path, ap_pcap_traces, ap_pcap_frames, sta_pcap_traces, sta_pcap_frames, promisc_totals):
+    """Inspecciona un archivo .pcap (DLT 127 Radiotap o DLT 105 802.11) y atribuye trazas a BSSIDs y STAs."""
+    try:
+        data = pcap_path.read_bytes()
+    except Exception:
+        return 0
+    if len(data) < 24:
+        return 0
+
+    magic, vmaj, vmin, tz, sigfigs, snaplen, dlt = struct.unpack_from("<IHHiIII", data, 0)
+    if magic not in (0xA1B2C3D4, 0xA1B23C4D):
+        return 0
+
+    pos = 24
+    total_len = len(data)
+    pkts = 0
+
+    while pos + 16 <= total_len:
+        ts_sec, ts_usec, incl_len, orig_len = struct.unpack_from("<IIII", data, pos)
+        pos += 16
+        if incl_len == 0 or pos + incl_len > total_len:
+            break
+        pkt = data[pos : pos + incl_len]
+        pos += incl_len
+
+        if dlt == 127:  # Radiotap
+            if len(pkt) < 8:
+                continue
+            rtap_len = struct.unpack_from("<H", pkt, 2)[0]
+            if rtap_len >= len(pkt):
+                continue
+            dot11 = pkt[rtap_len:]
+        elif dlt == 105:  # IEEE 802.11
+            dot11 = pkt
+        else:
+            continue
+
+        if len(dot11) < 24:
+            continue
+
+        pkts += 1
+        fc0 = dot11[0]
+        fc1 = dot11[1]
+        ftype = (fc0 >> 2) & 0x03
+        subtype = (fc0 >> 4) & 0x0F
+        addr1 = dot11[4:10]
+        addr2 = dot11[10:16]
+        addr3 = dot11[16:22]
+
+        trace_type = None
+        bssid = None
+        sta = None
+
+        if ftype == 0x00:  # MGMT
+            if subtype == 0x08:
+                trace_type = "BEACON"
+                bssid = addr3
+            elif subtype == 0x04:
+                trace_type = "PROBE_REQ"
+                sta = addr2
+            elif subtype == 0x05:
+                trace_type = "PROBE_RESP"
+                bssid = addr3
+                sta = addr1
+            elif subtype in (0x00, 0x02):
+                trace_type = "ASSOC"
+                bssid = addr1
+                sta = addr2
+            elif subtype in (0x01, 0x03):
+                trace_type = "ASSOC"
+                bssid = addr3
+                sta = addr1
+            elif subtype == 0x0B:
+                trace_type = "AUTH"
+                bssid = addr3
+                sta = addr2 if addr1 == addr3 else addr1
+            elif subtype in (0x0A, 0x0C):
+                trace_type = "DEAUTH"
+                bssid = addr3
+                sta = addr2 if addr1 == addr3 else addr1
+            elif subtype == 0x0D:
+                trace_type = "ACTION"
+                bssid = addr3
+                sta = addr2 if addr1 == addr3 else addr1
+        elif ftype == 0x02:  # DATA
+            to_ds = (fc1 & 0x01) != 0
+            from_ds = (fc1 & 0x02) != 0
+            if to_ds and not from_ds:
+                bssid = addr1
+                sta = addr2
+            elif not to_ds and from_ds:
+                sta = addr1
+                bssid = addr2
+            if b"\xaa\xaa\x03\x00\x00\x00\x88\x8e" in dot11[24:44]:
+                trace_type = "EAPOL"
+            else:
+                trace_type = "DATA"
+
+        if not trace_type:
+            continue
+
+        if bssid and not _is_mcast_or_zero(bssid):
+            b_str = _fmt_mac(bssid)
+            ap_pcap_traces[b_str].add(trace_type)
+            ap_pcap_frames[b_str] += 1
+
+        if sta and not _is_mcast_or_zero(sta) and sta != bssid:
+            s_str = _fmt_mac(sta)
+            sta_pcap_traces[s_str].add(trace_type)
+            sta_pcap_frames[s_str] += 1
+
+    return pkts
+
+
 def load_records(paths):
     aps = {}
     sightings = Counter()
@@ -124,6 +254,10 @@ def load_records(paths):
     probe_best = {}                       # (sta_mac, ssid) -> info
     devices = {}                          # sta_mac -> aggregated device dossier
     promisc_totals = Counter()
+    ap_pcap_traces = defaultdict(set)     # bssid -> {"BEACON", "EAPOL", ...}
+    ap_pcap_frames = Counter()            # bssid -> count
+    sta_pcap_traces = defaultdict(set)    # sta_mac -> {"PROBE_REQ", "EAPOL", ...}
+    sta_pcap_frames = Counter()           # sta_mac -> count
 
     def ensure_device(sta_mac: str, rssi: int, ch: int, sid: str):
         sta = sta_mac.upper()
@@ -139,6 +273,7 @@ def load_records(paths):
                 "sessions": set(),
                 "associated_bssids": set(),
                 "probed_ssids": set(),
+                "pcap_traces": set(),
             }
             devices[sta] = d
         else:
@@ -212,8 +347,15 @@ def load_records(paths):
 
                 prom = payload.get("promisc")
                 if isinstance(prom, dict):
-                    for k in ("mgmt_frames", "data_frames", "probe_req_frames", "deauth_frames"):
+                    for k in ("mgmt_frames", "data_frames", "probe_req_frames", "deauth_frames", "eapol_frames", "pcap_frames", "pcap_bytes"):
                         promisc_totals[k] += int(prom.get(k, 0))
+                    for ap_p in prom.get("ap_pcap", []):
+                        bssid = ap_p.get("bssid", "").upper()
+                        if not bssid:
+                            continue
+                        for tr in ap_p.get("pcap_traces", []):
+                            ap_pcap_traces[bssid].add(str(tr).upper())
+                        ap_pcap_frames[bssid] += int(ap_p.get("pcap_frames", 0))
                     for cl in prom.get("clients", []):
                         sta = cl.get("sta_mac", "").upper()
                         bssid = cl.get("bssid", "").upper()
@@ -226,6 +368,12 @@ def load_records(paths):
                         d_entry = ensure_device(sta, rssi, ch, sid)
                         d_entry["total_frames"] += frames
                         d_entry["associated_bssids"].add(bssid)
+                        for tr in cl.get("pcap_traces", []):
+                            t_up = str(tr).upper()
+                            d_entry["pcap_traces"].add(t_up)
+                            sta_pcap_traces[sta].add(t_up)
+                            if t_up in ("EAPOL", "ASSOC", "AUTH", "DEAUTH"):
+                                ap_pcap_traces[bssid].add(t_up)
 
                         prev = clients_by_bssid[bssid].get(sta)
                         if prev is None:
@@ -256,6 +404,10 @@ def load_records(paths):
                         if pssid:
                             d_entry["probed_ssids"].add(pssid)
                             probes_by_sta[sta].add(pssid)
+                        for tr in pr.get("pcap_traces", []):
+                            t_up = str(tr).upper()
+                            d_entry["pcap_traces"].add(t_up)
+                            sta_pcap_traces[sta].add(t_up)
 
                         key = (sta, pssid)
                         prev = probe_best.get(key)
@@ -272,6 +424,38 @@ def load_records(paths):
                             if rssi > prev["rssi"]:
                                 prev["rssi"] = rssi
 
+    # Inspeccionar también cualquier fichero .pcap en los mismos directorios o en
+    # las subcarpetas pcap/ adyacentes para enriquecer las trazas PCAP por BSSID y STA.
+    base_dirs = {p.resolve().parent for p in paths if p.exists()}
+    scanned_dirs = set()
+    for b_dir in base_dirs:
+        scanned_dirs.add(b_dir)
+        scanned_dirs.add(b_dir / "pcap")
+        if b_dir.name == "jsonl":
+            scanned_dirs.add(b_dir.parent)
+            scanned_dirs.add(b_dir.parent / "pcap")
+    pcap_files_seen = set()
+    for d_dir in sorted(scanned_dirs):
+        if not d_dir.is_dir():
+            continue
+        for pcap_f in sorted(d_dir.glob("*.pcap")):
+            rp = pcap_f.resolve()
+            if rp in pcap_files_seen:
+                continue
+            pcap_files_seen.add(rp)
+            _parse_pcap_file_into(
+                rp,
+                ap_pcap_traces,
+                ap_pcap_frames,
+                sta_pcap_traces,
+                sta_pcap_frames,
+                promisc_totals,
+            )
+
+    for sta, tr_set in sta_pcap_traces.items():
+        if sta in devices:
+            devices[sta]["pcap_traces"].update(tr_set)
+
     for sid, smeta in sessions_meta.items():
         smeta["unique_aps"] = len(session_aps[sid])
         smeta["unique_clients"] = len(session_clients[sid])
@@ -285,6 +469,11 @@ def load_records(paths):
         "ap_sessions": ap_sessions,
         "sessions_meta": sessions_meta,
         "devices": devices,
+        "ap_pcap_traces": ap_pcap_traces,
+        "ap_pcap_frames": ap_pcap_frames,
+        "sta_pcap_traces": sta_pcap_traces,
+        "sta_pcap_frames": sta_pcap_frames,
+        "pcap_files": [f.name for f in sorted(pcap_files_seen)],
     }
     return aps, sightings, set(sessions_meta.keys()), total_scans, promisc_data
 
@@ -294,6 +483,13 @@ def build_intelligence_dataset(aps, sightings, sessions, total_scans, promisc_da
     ap_sessions = promisc_data["ap_sessions"]
     sessions_meta = promisc_data["sessions_meta"]
     devices_map = promisc_data["devices"]
+    ap_pcap_traces = promisc_data.get("ap_pcap_traces", {})
+    ap_pcap_frames = promisc_data.get("ap_pcap_frames", {})
+    sta_pcap_traces = promisc_data.get("sta_pcap_traces", {})
+    sta_pcap_frames = promisc_data.get("sta_pcap_frames", {})
+
+    def _sort_traces(tr_set):
+        return sorted(tr_set, key=lambda x: TRACE_ORDER.index(x) if x in TRACE_ORDER else 99)
 
     # Mapear SSID -> lista de BSSIDs
     ssid_to_bssids = defaultdict(list)
@@ -336,6 +532,8 @@ def build_intelligence_dataset(aps, sightings, sessions, total_scans, promisc_da
             "clients": sorted(clients_by_bssid.get(bssid, {}).keys()),
             "probing_stas": sorted(ssid_probing_stas.get(ssid, set())) if ssid else [],
             "cluster_size": len(ssid_to_bssids.get(ssid, [])) if ssid else 1,
+            "pcap_traces": _sort_traces(ap_pcap_traces.get(bssid, set())),
+            "pcap_frames": int(ap_pcap_frames.get(bssid, 0)),
         }
         ap_list.append(item)
         ap_by_bssid[bssid] = item
@@ -365,6 +563,8 @@ def build_intelligence_dataset(aps, sightings, sessions, total_scans, promisc_da
             "associated_ssids": assoc_ssids,
             "probed_ssids": probed,
             "matched_local_ssids": matched_local,
+            "pcap_traces": _sort_traces(d.get("pcap_traces", set()) | sta_pcap_traces.get(sta, set())),
+            "pcap_frames": int(sta_pcap_frames.get(sta, 0)),
         }
         dev_list.append(item)
         device_by_mac[sta] = item
@@ -390,7 +590,11 @@ def build_intelligence_dataset(aps, sightings, sessions, total_scans, promisc_da
             "data_frames": int(promisc_data["totals"]["data_frames"]),
             "probe_req_frames": int(promisc_data["totals"]["probe_req_frames"]),
             "deauth_frames": int(promisc_data["totals"]["deauth_frames"]),
+            "eapol_frames": int(promisc_data["totals"]["eapol_frames"]),
+            "pcap_frames": int(promisc_data["totals"]["pcap_frames"]),
+            "pcap_bytes": int(promisc_data["totals"]["pcap_bytes"]),
         },
+        "pcap_files": promisc_data.get("pcap_files", []),
         "channel_counts": {str(k): v for k, v in ch_counts.items()},
         "auth_counts": dict(auth_counts.most_common()),
         "ssid_collisions": ssid_collisions,
@@ -461,6 +665,7 @@ def print_report(aps, sightings, sessions, total_scans, promisc_data, tags_data=
 
     if devices_map:
         print(f"\n\033[1;35m[Modo Promiscuo — Dispositivos Clientes ({len(devices_map)} STAs)]\033[0m")
+        sta_pcap_traces = promisc_data.get("sta_pcap_traces", {})
         for sta, d in sorted(devices_map.items(), key=lambda kv: kv[1]["rssi"], reverse=True)[:16]:
             tag_info = tags_data.get("devices", {}).get(sta, {})
             tag_str = f" [{tag_info['label']}]" if tag_info.get("label") else ""
@@ -468,15 +673,18 @@ def print_report(aps, sightings, sessions, total_scans, promisc_data, tags_data=
                 f"{b} ({aps.get(b, {}).get('ssid') or 'AP ext'})" for b in sorted(d["associated_bssids"])
             ) or "Sin asociar"
             probes_str = ", ".join(sorted(d["probed_ssids"])) or "—"
+            traces_set = d.get("pcap_traces", set()) | sta_pcap_traces.get(sta, set())
+            pcap_str = f" | PCAP:[{','.join(sorted(traces_set))}]" if traces_set else ""
             ses_cnt = len(d["sessions"])
             print(
                 f"  {d['rssi']:>4}dBm | {sta}{tag_str} | {d['vendor']:<32.32} | "
-                f"{ses_cnt} ses | AP: {assoc_str} | Busca: {probes_str}"
+                f"{ses_cnt} ses | AP: {assoc_str} | Busca: {probes_str}{pcap_str}"
             )
 
     print(f"\n\033[1;32m[Catálogo Completo de Redes ({len(aps)} BSSIDs por potencia RSSI)]\033[0m")
-    print(f"  {'RSSI':>5}  {'CH':>2}  {'SES':>3}  {'STAs':>4}  {'WPS':<3}  {'AUTH':<15}  {'CIPHER':<9}  {'BSSID':<17}  {'SSID':<24}  FABRICANTE")
+    print(f"  {'RSSI':>5}  {'CH':>2}  {'SES':>3}  {'STAs':>4}  {'WPS':<3}  {'AUTH':<15}  {'CIPHER':<9}  {'BSSID':<17}  {'SSID':<24}  {'PCAP':<18}  FABRICANTE")
     ap_sessions = promisc_data["ap_sessions"]
+    ap_pcap_traces = promisc_data.get("ap_pcap_traces", {})
     for d in sorted(aps.values(), key=lambda x: x["rssi"], reverse=True):
         bssid = d["bssid"]
         ssid = "<OCULTA>" if d["hidden"] else d["ssid"]
@@ -484,9 +692,10 @@ def print_report(aps, sightings, sessions, total_scans, promisc_data, tags_data=
         vendor = resolve_vendor(bssid)
         n_ses = len(ap_sessions[bssid])
         n_stas = len(clients_by_bssid.get(bssid, {}))
+        tr_str = ",".join(sorted(ap_pcap_traces.get(bssid, set()))) or "—"
         print(
             f"  {d['rssi']:>4}dBm  {d['primary_channel']:>2}  {n_ses:>2}s  {n_stas:>4}  {wps:<3}  "
-            f"{d['auth_mode']:<15}  {d['pairwise_cipher']:<9}  {bssid}  {ssid:<24.24}  {vendor}"
+            f"{d['auth_mode']:<15}  {d['pairwise_cipher']:<9}  {bssid}  {ssid:<24.24}  {tr_str:<18.18}  {vendor}"
         )
 
 

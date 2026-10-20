@@ -3,8 +3,8 @@ services:
     build: .
     container_name: sigint-console
     ports:
-      - "8080:8080"
-      - "8443:8443"
+      - "47891:47891"
+      - "47892:47892"
     volumes:
       - ./data:/data
     restart: unless-stopped

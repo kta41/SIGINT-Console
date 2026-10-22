@@ -403,8 +403,10 @@ code, .mono {{
     </div>
   </div>
   <div class="top-actions no-print">
-    <label class="btn btn-primary" id="srv-upload-btn" style="display:none">📥 Importar .JSONL / .PCAP <input type="file" accept=".jsonl,.json,.ndjson,.pcap" multiple style="display:none" onchange="uploadJsonlFiles(event)"></label>
+    <label class="btn btn-primary" id="srv-upload-btn" style="display:none">📥 Importar .JSONL / .PCAP / Airodump .CSV <input type="file" accept=".jsonl,.json,.ndjson,.pcap,.csv" multiple style="display:none" onchange="uploadJsonlFiles(event)"></label>
     <a class="btn" id="hc22000-dl-btn" href="/export/hc22000" style="display:none;border-color:rgba(245,158,11,0.55);color:#fbbf24">🔓 Descargar .hc22000</a>
+    <a class="btn" id="airodump-dl-btn" href="/export/airodump" style="display:none;border-color:rgba(56,189,248,0.5);color:#38bdf8">📡 Airodump CSV</a>
+    <button onclick="exportAuditReportMarkdown()" style="border-color:rgba(16,185,129,0.55);color:#34d399">📄 Informe Auditoría (.MD)</button>
     <button onclick="openTagManagerModal()">🏷️ Nuevo Tag / Alias</button>
     <button onclick="exportTagsJson()">💾 Exportar tags.json</button>
     <label class="btn">📂 Importar tags.json <input type="file" accept=".json" style="display:none" onchange="importTagsJson(event)"></label>
@@ -416,9 +418,10 @@ code, .mono {{
   <button class="tab-btn active" onclick="switchTab('overview', this)">1. Resumen Ejecutivo &amp; Riesgos</button>
   <button class="tab-btn" onclick="switchTab('networks', this)">2. Inteligencia de Redes (APs / SSIDs)</button>
   <button class="tab-btn" onclick="switchTab('devices', this)">3. Inteligencia de Dispositivos (STAs &amp; PNL)</button>
-  <button class="tab-btn" onclick="switchTab('cross', this)">4. Álgebra de Conjuntos &amp; Cruce Multi-Sesión</button>
-  <button class="tab-btn" onclick="switchTab('sessions', this)">5. Sesiones, PCAP &amp; GPS</button>
-  <button class="tab-btn" onclick="switchTab('tags', this)">6. Registro de Identidades (Tags)</button>
+  <button class="tab-btn" onclick="switchTab('graph', this)">4. 🕸️ Visión de Grafos &amp; Relaciones</button>
+  <button class="tab-btn" onclick="switchTab('cross', this)">5. Álgebra de Conjuntos &amp; Cruce Multi-Sesión</button>
+  <button class="tab-btn" onclick="switchTab('sessions', this)">6. Sesiones, PCAP &amp; GPS</button>
+  <button class="tab-btn" onclick="switchTab('tags', this)">7. 📋 Bóveda de Evidencias &amp; Tags</button>
 </nav>
 
 <main>
@@ -461,6 +464,7 @@ code, .mono {{
       <div class="toolbar" style="margin-top:-4px">
         <div class="chip-group" id="net-chips">
           <span class="chip active" onclick="setNetFilter('all', this)">Todas</span>
+          <span class="chip" onclick="setNetFilter('cracked', this)" style="border-color:rgba(16,185,129,0.55);color:#34d399">🔓 Crackeadas / Con Evidencia</span>
           <span class="chip" onclick="setNetFilter('insecure', this)" style="border-color:rgba(239,68,68,0.45);color:#f87171">⚠️ Redes No Seguras (OPEN/WEP/TKIP/WPS)</span>
           <span class="chip" onclick="setNetFilter('weak', this)">Cifrado Débil (OPEN/WEP/TKIP)</span>
           <span class="chip" onclick="setNetFilter('wps', this)">WPS Expuesto</span>
@@ -554,7 +558,93 @@ code, .mono {{
     </div>
   </section>
 
-  <!-- TAB 4: CROSS-SESSION PERSISTENCE -->
+  <!-- TAB 4: GRAPH TOPOLOGY & SESSION RELATIONSHIPS -->
+  <section id="tab-graph" class="tab-pane">
+    <div class="panel">
+      <h3 class="panel-title">
+        <span>🕸️ Topología de Relaciones por Sesión — Conexiones Confirmadas &amp; Vínculos Sospechosos</span>
+        <span class="mono" id="graph-stats-badge"></span>
+      </h3>
+      <p style="color:var(--muted);margin-top:0;margin-bottom:12px">
+        Muestra únicamente relaciones con redes <b>físicamente detectadas</b>. Si un dispositivo emite <i>Probe Requests</i> hacia redes inexistentes sin vínculo en el entorno, <b>se descartan para evitar ruido</b>. Las <b>sospechas de conexión</b> (línea discontinua naranja) indican dispositivos que buscan activamente un SSID presente en la sesión, co-presencia de vínculos históricos o nodos de un mismo cluster.
+      </p>
+      <div class="toolbar no-print">
+        <label style="font-size:12px;color:var(--muted)">Sesión:
+          <select id="graph-session-select" onchange="rebuildGraphTopology()" style="margin-left:4px;min-width:240px">
+            <option value="">🌐 Todas las sesiones (Grafo Consolidado)</option>
+          </select>
+        </label>
+        <label style="font-size:12px;color:var(--muted)">Relaciones:
+          <select id="graph-edge-mode" onchange="rebuildGraphTopology()" style="margin-left:4px">
+            <option value="all">🔗 Todas (Confirmadas + Sospechas)</option>
+            <option value="confirmed">✅ Solo Conexiones Confirmadas (802.11 Directo)</option>
+            <option value="suspected">⚠️ Solo Sospechas de Conexión (PNL Presente / Histórico)</option>
+            <option value="handshake">🔑 Solo con Handshake EAPOL / PMKID</option>
+          </select>
+        </label>
+        <input type="text" id="graph-search" placeholder="Filtrar nodo (SSID, MAC, fabricante, tag...)" style="min-width:220px;flex:1" oninput="rebuildGraphTopology()">
+        <label style="font-size:12px;color:var(--text);display:inline-flex;align-items:center;gap:5px;cursor:pointer">
+          <input type="checkbox" id="graph-show-cluster" checked onchange="rebuildGraphTopology()"> 🟣 Clusters Multi-BSSID
+        </label>
+        <label style="font-size:12px;color:var(--text);display:inline-flex;align-items:center;gap:5px;cursor:pointer">
+          <input type="checkbox" id="graph-show-isolated-aps" onchange="rebuildGraphTopology()"> 📡 Incluir APs sin clientes
+        </label>
+        <button onclick="resetGraphView()">🎯 Centrar</button>
+        <button id="graph-pause-btn" onclick="toggleGraphPhysics()">❄️ Pausar Física</button>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 330px;gap:14px;align-items:stretch">
+        <div style="position:relative;background:#060a12;border:1px solid var(--border-hi);border-radius:8px;overflow:hidden;min-height:540px">
+          <canvas id="sigint-graph-canvas" style="width:100%;height:540px;display:block;cursor:grab"></canvas>
+          <div style="position:absolute;left:12px;bottom:10px;background:rgba(9,14,26,0.88);border:1px solid var(--border-hi);border-radius:6px;padding:8px 12px;font-size:11px;display:flex;flex-wrap:wrap;gap:12px;pointer-events:none">
+            <span><b style="color:#38bdf8">⬢ Nodo Azul/Rojo:</b> Punto de Acceso (BSSID)</span>
+            <span><b style="color:#a78bfa">● Nodo Circular:</b> Dispositivo Cliente (STA)</span>
+            <span><b style="color:#10b981">━━ Línea Sólida:</b> Conexión Real Confirmada</span>
+            <span><b style="color:#fbbf24">━━ Línea Dorada:</b> EAPOL / Handshake</span>
+            <span><b style="color:#fb923c">╌╌ Línea Discontinua:</b> ⚠️ Sospecha de Conexión</span>
+            <span><b style="color:#c084fc">┈┈ Punteada:</b> Cluster Mismo SSID</span>
+          </div>
+        </div>
+        <div class="panel" style="margin:0;background:var(--bg-card);display:flex;flex-direction:column;justify-content:space-between" id="graph-inspector">
+          <div>
+            <h4 style="margin:0 0 8px 0;color:var(--accent);font-size:13px;text-transform:uppercase">🔍 Inspector de Nodo / Relación</h4>
+            <div id="graph-inspector-body" style="font-size:12.5px;color:var(--muted)">
+              Haz clic sobre cualquier <b>Punto de Acceso (⬢)</b>, <b>Dispositivo (●)</b> o <b>Arista de conexión</b> en el grafo para inspeccionar la evidencia técnica, tramas capturadas, huellas PNL/IE y abrir su dossier.
+            </div>
+          </div>
+          <div style="border-top:1px solid var(--border);padding-top:10px;margin-top:12px;font-size:11px;color:var(--muted)">
+            💡 <b>Controles:</b> Rueda del ratón para Zoom · Arrastrar fondo para mover cámara · Arrastrar nodo para fijar posición.
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3 class="panel-title">
+        <span>Matriz de Evidencia de Relaciones Detectadas en la Vista Actual</span>
+        <span class="mono" id="graph-table-count"></span>
+      </h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Estado del Vínculo</th>
+              <th>Confianza</th>
+              <th>Dispositivo Cliente (STA MAC)</th>
+              <th>Punto de Acceso (SSID / BSSID)</th>
+              <th>CH / RSSI</th>
+              <th>Evidencia Técnica &amp; Motivo de Correlación</th>
+              <th>Trazas PCAP</th>
+              <th>Sesiones</th>
+            </tr>
+          </thead>
+          <tbody id="graph-edges-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- TAB 5: CROSS-SESSION PERSISTENCE -->
   <section id="tab-cross" class="tab-pane">
     <div class="panel">
       <h3 class="panel-title">Correlación Multi-Sesión — Dispositivos y Redes Recurrentes</h3>
@@ -858,10 +948,23 @@ function getDeviceTag(mac) {{
 }}
 
 function renderTagBadge(tagObj) {{
-  if (!tagObj || !tagObj.label) return '<span style="color:var(--muted)">—</span>';
-  const cls = catBadgeClass(tagObj.category);
-  const cat = tagObj.category ? `[${{esc(tagObj.category)}}] ` : "";
-  return `<span class="badge ${{cls}}">${{cat}}${{esc(tagObj.label)}}</span>`;
+  if (!tagObj || (!tagObj.label && !tagObj.psk && !tagObj.evidence && !tagObj.audit_status)) {{
+    return '<span style="color:var(--muted)">—</span>';
+  }}
+  const parts = [];
+  if (tagObj.label) {{
+    const cls = catBadgeClass(tagObj.category);
+    const cat = tagObj.category ? `[${{esc(tagObj.category)}}] ` : "";
+    parts.push(`<span class="badge ${{cls}}">${{cat}}${{esc(tagObj.label)}}</span>`);
+  }}
+  if (tagObj.psk) {{
+    parts.push(`<span class="badge b-suspicious" title="Clave WPA/WEP recuperada y almacenada en Bóveda">🔓 PSK: ${{esc(tagObj.psk)}}</span>`);
+  }} else if (tagObj.audit_status === "CRACKEADA") {{
+    parts.push(`<span class="badge b-suspicious">🔓 CRACKEADA</span>`);
+  }} else if (tagObj.audit_status === "VULNERABLE" || tagObj.evidence) {{
+    parts.push(`<span class="badge b-target">📋 EVIDENCIA</span>`);
+  }}
+  return parts.join(" ");
 }}
 
 function renderPcapTracesBadges(traces, framesCount) {{
@@ -899,6 +1002,12 @@ function switchTab(id, btn) {{
   document.querySelectorAll(".tab-btn").forEach(el => el.classList.remove("active"));
   document.getElementById("tab-" + id).classList.add("active");
   if (btn) btn.classList.add("active");
+  if (id === "graph") {{
+    setTimeout(() => {{
+      resizeGraphCanvas();
+      rebuildGraphTopology();
+    }}, 20);
+  }}
 }}
 
 function renderOverview() {{
@@ -1088,6 +1197,7 @@ function renderNetworksTable() {{
     const traces = ap.pcap_traces || [];
     if (sesFilter && !ap.sessions.includes(sesFilter)) return false;
     if (notSesFilter && ap.sessions.includes(notSesFilter)) return false;
+    if (netFilter === "cracked" && (!tag || (!tag.psk && !tag.evidence && tag.audit_status !== "CRACKEADA" && tag.audit_status !== "VULNERABLE"))) return false;
     if (netFilter === "insecure" && !ap.is_weak && !ap.wps) return false;
     if (netFilter === "pcap" && traces.length === 0) return false;
     if (netFilter === "eapol" && !traces.includes("EAPOL") && !traces.includes("PMKID") && !traces.includes("HANDSHAKE")) return false;
@@ -1523,7 +1633,73 @@ function renderSessionsTable() {{
 }}
 
 function renderTagsRegistry() {{
-  let html = `<h4>Sesiones Nombradas</h4><table><thead><tr><th>Session ID</th><th>Nombre</th><th>GPS Asociado</th><th>Notas</th><th>Acción</th></tr></thead><tbody>`;
+  const nEntries = Object.entries(TAGS.networks);
+  const auditedEntries = nEntries.filter(([, info]) => info.psk || info.evidence || info.audit_status || info.wps_pin || info.remediation);
+
+  let html = `
+    <div class="kv" style="margin-bottom:18px;border-left:3px solid #10b981;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+      <div>
+        <div class="kv-k" style="color:#34d399">🔐 BÓVEDA DE EVIDENCIAS RED TEAM &amp; GENERADOR DE INFORME DE AUDITORÍA</div>
+        <div style="font-size:12.5px;margin-top:4px;color:var(--text)">
+          Redes documentadas con evidencia / credenciales recuperadas: <b>${{auditedEntries.length}}</b>. Haz clic en cualquier Punto de Acceso del catálogo o del grafo para anotar la PSK recuperada, el vector empleado, logs de <code>aircrack-ng</code> / <code>hashcat</code> y el plan de remediación.
+        </div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn-primary" onclick="exportAuditReportMarkdown()">📄 Descargar Informe de Auditoría (.MD)</button>
+      </div>
+    </div>
+
+    <h4>Redes Auditadas, Crackeadas y Evidencias para el Informe (${{auditedEntries.length}})</h4>
+    <table>
+      <thead>
+        <tr>
+          <th>BSSID / SSID</th>
+          <th>Alias / Categoría</th>
+          <th>Estado Auditoría</th>
+          <th>Credencial Recuperada (PSK / PIN)</th>
+          <th>Vector / Severidad</th>
+          <th>Evidencia Técnica &amp; Remediación</th>
+          <th>Acción</th>
+        </tr>
+      </thead>
+      <tbody>
+  `;
+  if (auditedEntries.length === 0) {{
+    html += `<tr><td colspan="7" style="color:var(--muted);text-align:center;padding:18px">Aún no has registrado evidencias de cracking o auditoría. Abre el Dossier de cualquier red (clic en su BSSID) y rellena la <b>Bóveda de Evidencia de Auditoría</b>.</td></tr>`;
+  }} else {{
+    auditedEntries.forEach(([k, info]) => {{
+      const apObj = DATA.ap_by_bssid[k] || null;
+      const ssidDisp = apObj ? (apObj.ssid || "[Oculta]") : "";
+      const stBadge = info.audit_status === "CRACKEADA" || info.psk
+        ? `<span class="badge b-suspicious">🔓 CRACKEADA</span>`
+        : `<span class="badge b-target">📋 ${{esc(info.audit_status || "VULNERABLE")}}</span>`;
+      const credHtml = [
+        info.psk ? `<div><b style="color:#fbbf24">PSK:</b> <code class="mono">${{esc(info.psk)}}</code></div>` : "",
+        info.wps_pin ? `<div><b style="color:#38bdf8">WPS PIN:</b> <code class="mono">${{esc(info.wps_pin)}}</code></div>` : "",
+      ].filter(Boolean).join("") || '<span style="color:var(--muted)">—</span>';
+
+      html += `<tr>
+        <td class="mono">
+          ${{apObj ? `<a class="entity-link" onclick="openApDossier('${{esc(k)}}')"><b>${{esc(k)}}</b></a>` : `<b>${{esc(k)}}</b>`}}
+          ${{ssidDisp ? `<div style="font-size:11px;color:var(--muted)">${{esc(ssidDisp)}}</div>` : ""}}
+        </td>
+        <td>${{renderTagBadge(info)}}</td>
+        <td>${{stBadge}}</td>
+        <td>${{credHtml}}</td>
+        <td class="mono" style="font-size:11.5px">${{esc(info.vector || "—")}}<br><span style="color:var(--muted)">${{esc(info.cvss_severity || "HIGH")}}</span></td>
+        <td style="max-width:360px;font-size:12px">
+          ${{info.evidence ? `<div><b>Evidencia:</b> ${{esc(info.evidence)}}</div>` : ""}}
+          ${{info.remediation ? `<div style="color:#34d399;margin-top:3px"><b>Remediación:</b> ${{esc(info.remediation)}}</div>` : ""}}
+        </td>
+        <td>
+          ${{apObj ? `<button onclick="openApDossier('${{esc(k)}}')">✏️ Editar Evidencia</button>` : `<button onclick="deleteTag('networks','${{esc(k)}}')">🗑️ Borrar</button>`}}
+        </td>
+      </tr>`;
+    }});
+  }}
+  html += `</tbody></table>`;
+
+  html += `<h4 style="margin-top:24px">Sesiones Nombradas</h4><table><thead><tr><th>Session ID</th><th>Nombre</th><th>GPS Asociado</th><th>Notas</th><th>Acción</th></tr></thead><tbody>`;
   const sEntries = Object.entries(TAGS.sessions);
   if (sEntries.length === 0) {{
     html += `<tr><td colspan="5" style="color:var(--muted)">Sin sesiones etiquetadas aún.</td></tr>`;
@@ -1542,7 +1718,6 @@ function renderTagsRegistry() {{
   html += `</tbody></table>`;
 
   html += `<h4 style="margin-top:20px">Redes Etiquetadas (BSSID / SSID)</h4><table><thead><tr><th>Clave</th><th>Etiqueta / Alias</th><th>Categoría</th><th>Notas</th><th>Acción</th></tr></thead><tbody>`;
-  const nEntries = Object.entries(TAGS.networks);
   if (nEntries.length === 0) {{
     html += `<tr><td colspan="5" style="color:var(--muted)">Sin redes etiquetadas aún.</td></tr>`;
   }} else {{
@@ -1583,13 +1758,135 @@ function deleteTag(group, key) {{
   saveTags();
 }}
 
+function suggestApRemediation(bssid) {{
+  const ap = DATA.ap_by_bssid[bssid];
+  if (!ap) return;
+  const recs = [];
+  if (ap.auth_mode === "OPEN" || ap.auth_mode === "WEP") {{
+    recs.push("Migrar inmediatamente a WPA2-PSK (AES-CCMP) o WPA3-SAE con Protected Management Frames (802.11w PMF) activo.");
+  }} else if (ap.pairwise_cipher.includes("TKIP") || ap.auth_mode.includes("WPA_")) {{
+    recs.push("Deshabilitar el soporte heredado WPA1 y TKIP en el router, forzando exclusivamente WPA2-CCMP / WPA3-SAE.");
+  }}
+  if (ap.wps) {{
+    recs.push("Deshabilitar Wi-Fi Protected Setup (WPS) en la configuración del punto de acceso para mitigar ataques Pixie-Dust y fuerza bruta de PIN.");
+  }}
+  recs.push("Rotar la clave precompartida (PSK) por una frase de paso aleatoria de al menos 20 caracteres no basada en diccionario ni patrones de operadora.");
+  const el = document.getElementById("vault-remediation");
+  if (el) el.value = recs.join(" ");
+}}
+
+function saveApAuditEvidence(bssid, defaultSsid) {{
+  const norm = bssid.toUpperCase();
+  const cur = Object.assign({{}}, TAGS.networks[norm] || {{}});
+  const labelVal = (document.getElementById("vault-label").value || "").trim();
+  const catVal = document.getElementById("vault-category").value;
+  const statusVal = document.getElementById("vault-status").value;
+  const pskVal = (document.getElementById("vault-psk").value || "").trim();
+  const pinVal = (document.getElementById("vault-pin").value || "").trim();
+  const vectorVal = document.getElementById("vault-vector").value;
+  const sevVal = document.getElementById("vault-sev").value;
+  const evVal = (document.getElementById("vault-evidence").value || "").trim();
+  const remVal = (document.getElementById("vault-remediation").value || "").trim();
+
+  cur.label = labelVal || cur.label || defaultSsid || norm;
+  cur.category = catVal || "OBJETIVO";
+  cur.audit_status = pskVal && statusVal === "PENDIENTE" ? "CRACKEADA" : statusVal;
+  cur.psk = pskVal;
+  cur.wps_pin = pinVal;
+  cur.vector = vectorVal;
+  cur.cvss_severity = sevVal;
+  cur.evidence = evVal;
+  cur.remediation = remVal;
+  cur.updated_at = new Date().toISOString().slice(0, 19).replace("T", " ");
+
+  TAGS.networks[norm] = cur;
+  saveTags();
+  openApDossier(norm);
+}}
+
+function exportAuditReportMarkdown() {{
+  const nowStr = new Date().toISOString().slice(0, 19).replace("T", " ");
+  const nEntries = Object.entries(TAGS.networks);
+  const audited = nEntries.filter(([, inf]) => inf.psk || inf.evidence || inf.audit_status || inf.wps_pin || inf.remediation);
+  const weakAps = DATA.aps.filter(a => a.is_weak || a.wps);
+  const evilTwins = DATA.evil_twin_alerts || [];
+
+  let md = `# 📋 Informe Técnico de Auditoría Inalámbrica 802.11 (SIGINT-Console)\\n\\n`;
+  md += `- **Fecha de generación:** ${{nowStr}}\\n`;
+  md += `- **Sesiones analizadas:** ${{DATA.sessions.length}} (${{DATA.total_scans}} barridos pasivos/promiscuos)\\n`;
+  md += `- **Infraestructura detectada:** ${{DATA.aps.length}} BSSIDs (${{DATA.unique_ssids}} SSIDs únicos) y ${{DATA.devices.length}} clientes (STAs)\\n`;
+  md += `- **Redes con debilidades criptográficas / WPS:** ${{weakAps.length}}\\n`;
+  md += `- **Redes auditadas / con evidencia registrada en Bóveda:** ${{audited.length}}\\n\\n`;
+  md += `---\\n\\n`;
+
+  md += `## 1. 🔓 Resumen de Redes Auditadas y Credenciales Recuperadas\\n\\n`;
+  if (audited.length === 0) {{
+    md += `> *No se han registrado evidencias manuales ni claves PSK en la bóveda todavía.*\\n\\n`;
+  }} else {{
+    md += `| BSSID | SSID / Alias | Estado | Severidad | Vector | PSK Recuperada | PIN WPS |\\n`;
+    md += `| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\\n`;
+    audited.forEach(([key, inf]) => {{
+      const ap = DATA.ap_by_bssid[key] || {{}};
+      const ssidName = ap.ssid || inf.label || key;
+      md += `| \`${{key}}\` | **${{ssidName}}** | ${{inf.audit_status || "AUDITADA"}} | **${{inf.cvss_severity || "HIGH"}}** | ${{inf.vector || "—"}} | \`${{inf.psk || "—"}}\` | \`${{inf.wps_pin || "—"}}\` |\\n`;
+    }});
+    md += `\\n`;
+
+    md += `## 2. 📂 Fichas Detalladas de Evidencia por Objetivo\\n\\n`;
+    audited.forEach(([key, inf], idx) => {{
+      const ap = DATA.ap_by_bssid[key] || {{}};
+      const ssidName = ap.ssid || inf.label || key;
+      md += `### 2.${{idx + 1}}. Objetivo: ${{ssidName}} (\`${{key}}\`)\\n\\n`;
+      md += `- **Alias / Clasificación:** ${{inf.label || "—"}} (\`${{inf.category || "OBJETIVO"}}\`)\\n`;
+      md += `- **Estado de Auditoría:** **${{inf.audit_status || "VULNERABLE"}}** (Severidad: **${{inf.cvss_severity || "HIGH"}}**)\\n`;
+      if (ap.bssid) {{
+        md += `- **Parámetros RF & Seguridad:** Canal ${{ap.primary_channel}} (${{ap.band_mhz}} MHz) · RSSI máx ${{ap.rssi}} dBm · \`${{ap.auth_mode}} / ${{ap.pairwise_cipher}}\` · WPS: ${{ap.wps ? "SÍ" : "NO"}}\\n`;
+        md += `- **Fabricante (OUI):** ${{ap.vendor}}\\n`;
+        if (ap.clients && ap.clients.length > 0) {{
+          md += `- **Estaciones Clientes Asociadas (${{ap.clients.length}}):** ${{ap.clients.map(c => "`" + c + "`").join(", ")}}\\n`;
+        }}
+        if (ap.pcap_traces && ap.pcap_traces.length > 0) {{
+          md += `- **Trazas PCAP Capturadas:** ${{ap.pcap_traces.join(", ")}} (${{ap.pcap_frames}} paquetes)\\n`;
+        }}
+      }}
+      if (inf.psk) md += `- **🔑 Contraseña Precompartida (PSK) Recuperada:** \`${{inf.psk}}\`\\n`;
+      if (inf.wps_pin) md += `- **📌 PIN WPS Recuperado:** \`${{inf.wps_pin}}\`\\n`;
+      if (inf.vector) md += `- **🎯 Vector de Auditoría:** ${{inf.vector}}\\n`;
+      if (inf.evidence) {{
+        md += `\\n**Evidencia Técnica / Registro de Pruebas:**\\n\`\`\`text\\n${{inf.evidence}}\\n\`\`\`\\n`;
+      }}
+      if (inf.remediation) {{
+        md += `\\n**Plan de Remediación Recomendado:**\\n> ${{inf.remediation}}\\n`;
+      }}
+      md += `\\n---\\n\\n`;
+    }});
+  }}
+
+  if (evilTwins.length > 0) {{
+    md += `## 3. 🚨 Alertas de Anomalías Multi-BSSID / Posibles Rogue AP (Evil Twin)\\n\\n`;
+    evilTwins.forEach(et => {{
+      md += `- **SSID \`${{et.ssid}}\`** (${{et.bssids.length}} BSSIDs: ${{et.bssids.map(b => "`" + b + "`").join(", ")}}) — Severidad **${{et.severity}}**: ${{et.anomaly_reasons.join(" · ")}}\\n`;
+    }});
+    md += `\\n`;
+  }}
+
+  const blob = new Blob([md], {{ type: "text/markdown;charset=utf-8" }});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `informe_auditoria_wifi_${{new Date().toISOString().slice(0, 10)}}.md`;
+  a.click();
+}}
+
 /* ---------------- DOSSIERS INTERACTIVOS ---------------- */
 
 function openApDossier(bssid) {{
   const ap = DATA.ap_by_bssid[bssid];
   if (!ap) return;
-  const tag = getNetworkTag(ap.bssid, ap.ssid);
+  const tag = getNetworkTag(ap.bssid, ap.ssid) || {{}};
   const stas = ap.clients.map(mac => DATA.device_by_mac[mac]).filter(Boolean);
+  const matchingPcap = (DATA.pcap_files || []).find(pf => (ap.sessions || []).some(s => pf.includes(s))) || "wardrive_session.pcap";
+  const bestSta = stas.length > 0 ? stas[0].sta_mac : "FF:FF:FF:FF:FF:FF";
+  const savedPsk = tag.psk || "";
 
   let html = `
     <div class="modal-header">
@@ -1598,7 +1895,7 @@ function openApDossier(bssid) {{
         <h2 style="margin:0">${{ap.hidden ? "&lt;RED OCULTA&gt;" : esc(ap.ssid)}} <span class="mono" style="color:var(--accent)">(${{ap.bssid}})</span></h2>
       </div>
       <div style="display:flex;gap:8px">
-        <button onclick="openTagEditor('network', '${{ap.bssid}}', '${{esc(ap.ssid || ap.bssid)}}')">🏷️ Etiquetar AP</button>
+        <button onclick="openTagEditor('network', '${{ap.bssid}}', '${{esc(ap.ssid || ap.bssid)}}')">🏷️ Etiqueta Rápida</button>
         <button onclick="closeModal()">✕ Cerrar</button>
       </div>
     </div>
@@ -1614,6 +1911,91 @@ function openApDossier(bssid) {{
       ${{ap.eapol_msgs && ap.eapol_msgs.length > 0 ? `<div class="kv"><div class="kv-k">Mensajes EAPOL Vistos</div><div class="kv-v" style="color:var(--amber)">${{esc(ap.eapol_msgs.join(", "))}}</div></div>` : ""}}
       ${{ap.deauth_reasons && ap.deauth_reasons.length > 0 ? `<div class="kv"><div class="kv-k">Razones Deauth (IEEE)</div><div class="kv-v" style="color:var(--red)">${{esc(ap.deauth_reasons.join(", "))}}</div></div>` : ""}}
     </div>
+
+    <!-- BÓVEDA DE EVIDENCIAS DE AUDITORÍA -->
+    <div class="kv" style="border:1px solid rgba(16,185,129,0.45);background:#0c1526;padding:14px;margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div class="kv-k" style="color:#34d399;font-size:12px">🔐 BÓVEDA DE EVIDENCIA DE AUDITORÍA &amp; CREDENCIALES RECUPERADAS (PARA EL INFORME)</div>
+        <button onclick="suggestApRemediation('${{esc(ap.bssid)}}')" style="font-size:11px;padding:4px 8px">✨ Auto-sugerir Remediación</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:10px;margin-bottom:10px">
+        <label style="font-size:11.5px;color:var(--muted)">Alias / Nombre Objetivo:<br>
+          <input type="text" id="vault-label" value="${{esc(tag.label || ap.ssid || "")}}" placeholder="Ej. Corp_WiFi_Planta2" style="width:100%;margin-top:3px">
+        </label>
+        <label style="font-size:11.5px;color:var(--muted)">Clasificación:<br>
+          <select id="vault-category" style="width:100%;margin-top:3px">
+            ${{["OBJETIVO", "VULNERABLE", "PROPIO", "CONOCIDO", "SOSPECHOSO", "IGNORAR"].map(c =>
+              `<option value="${{c}}" ${{(tag.category || "OBJETIVO") === c ? "selected" : ""}}>${{c}}</option>`
+            ).join("")}}
+          </select>
+        </label>
+        <label style="font-size:11.5px;color:var(--muted)">Estado de Auditoría:<br>
+          <select id="vault-status" style="width:100%;margin-top:3px">
+            ${{["PENDIENTE", "EN_PROGRESO", "VULNERABLE", "CRACKEADA", "SEGURA"].map(st =>
+              `<option value="${{st}}" ${{(tag.audit_status || (tag.psk ? "CRACKEADA" : "PENDIENTE")) === st ? "selected" : ""}}>${{st}}</option>`
+            ).join("")}}
+          </select>
+        </label>
+        <label style="font-size:11.5px;color:var(--muted)">Severidad Hallazgo:<br>
+          <select id="vault-sev" style="width:100%;margin-top:3px">
+            ${{["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"].map(sv =>
+              `<option value="${{sv}}" ${{(tag.cvss_severity || "HIGH") === sv ? "selected" : ""}}>${{sv}}</option>`
+            ).join("")}}
+          </select>
+        </label>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1.2fr;gap:10px;margin-bottom:10px">
+        <label style="font-size:11.5px;color:#fbbf24">🔑 Clave WPA / WEP Recuperada (PSK):<br>
+          <input type="text" id="vault-psk" value="${{esc(tag.psk || "")}}" placeholder="Ej. Movistar_9876_Clave!" style="width:100%;margin-top:3px;border-color:rgba(245,158,11,0.5)">
+        </label>
+        <label style="font-size:11.5px;color:var(--muted)">📌 PIN WPS Recuperado (opcional):<br>
+          <input type="text" id="vault-pin" value="${{esc(tag.wps_pin || "")}}" placeholder="Ej. 12345670" style="width:100%;margin-top:3px">
+        </label>
+        <label style="font-size:11.5px;color:var(--muted)">🎯 Vector Empleado:<br>
+          <select id="vault-vector" style="width:100%;margin-top:3px">
+            ${{[
+              "Handshake EAPOL 4-Way (WPA*02)",
+              "PMKID RSN Clientless (WPA*01)",
+              "WPS Pixie-Dust / PIN Brute-Force",
+              "Cifrado Obsoleto WEP / WPA1-TKIP",
+              "Red Abierta sin Cifrado (OPN)",
+              "Diccionario / Patrón por Defecto ISP",
+              "Rogue AP / Evil Twin",
+            ].map(vc => `<option value="${{vc}}" ${{tag.vector === vc ? "selected" : ""}}>${{vc}}</option>`).join("")}}
+          </select>
+        </label>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+        <label style="font-size:11.5px;color:var(--muted)">📋 Evidencia Técnica / Salida de Aircrack-ng o Hashcat:<br>
+          <textarea id="vault-evidence" rows="3" placeholder="Ej. KEY FOUND! [ MiClave123 ] sobre captura ${{esc(matchingPcap)}} (EAPOL M1+M2 con cliente ${{esc(bestSta)}})..." style="width:100%;margin-top:3px">${{esc(tag.evidence || "")}}</textarea>
+        </label>
+        <label style="font-size:11.5px;color:var(--muted)">🛡️ Recomendación de Remediación para el Informe:<br>
+          <textarea id="vault-remediation" rows="3" placeholder="Pulsa 'Auto-sugerir Remediación' o escribe la medida correctiva..." style="width:100%;margin-top:3px">${{esc(tag.remediation || "")}}</textarea>
+        </label>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px">
+        <button class="btn-primary" onclick="saveApAuditEvidence('${{esc(ap.bssid)}}', '${{esc(ap.ssid || ap.bssid)}}')">💾 Guardar Evidencia en Bóveda</button>
+      </div>
+    </div>
+
+    <!-- INTEGRACIÓN SUITE AIRCRACK-NG -->
+    <div class="kv" style="border-left:3px solid #38bdf8;margin-bottom:16px">
+      <div class="kv-k" style="color:#38bdf8">🛠️ INTEGRACIÓN SUITE AIRCRACK-NG &amp; POST-AUDITORÍA (PRE-RELLENADO PARA ESTE BSSID)</div>
+      <div style="margin-top:8px;display:grid;gap:6px;font-size:12px" class="mono">
+        <div><span style="color:var(--muted)"># 1. Captura focalizada en Canal ${{ap.primary_channel}} (airodump-ng):</span><br>
+          <code>airodump-ng -c ${{ap.primary_channel}} --bssid ${{ap.bssid}} -w audit_${{esc((ap.ssid || "target").replace(/\\W+/g, "_"))}} wlan1mon</code>
+        </div>
+        <div><span style="color:var(--muted)"># 2. Auditoría de diccionario con aircrack-ng / warwifi sobre el PCAP:</span><br>
+          <code>aircrack-ng -b ${{ap.bssid}} -w wordlist.txt ${{esc(matchingPcap)}}</code>
+        </div>
+        <div><span style="color:var(--muted)"># 3. Desencriptar tráfico 802.11 capturado en el PCAP (airdecap-ng):</span><br>
+          <code>${{ap.auth_mode === "OPEN"
+            ? `airdecap-ng -b ${{ap.bssid}} -e "${{esc(ap.ssid)}}" ${{esc(matchingPcap)}}`
+            : `airdecap-ng -b ${{ap.bssid}} -e "${{esc(ap.ssid)}}" -p "${{esc(savedPsk || "<TU_PSK_RECUPERADA>")}}" ${{esc(matchingPcap)}}`}}</code>
+        </div>
+      </div>
+    </div>
+
     <h4>Evaluación de Seguridad y Vulnerabilidades Detectadas</h4>
     ${{(() => {{
       const vulns = getApVulnerabilities(ap);
@@ -2172,11 +2554,750 @@ function closeModal() {{
   document.getElementById("modal-backdrop").classList.remove("open");
 }}
 
+/* ---------------- MOTOR DE GRAFOS Y RELACIONES POR SESIÓN ---------------- */
+
+const GRAPH_STATE = {{
+  nodes: [],
+  nodeById: {{}},
+  edges: [],
+  clusterEdges: [],
+  camera: {{ x: 0, y: 0, zoom: 1.0 }},
+  paused: false,
+  draggingNode: null,
+  panning: false,
+  panStart: {{ x: 0, y: 0 }},
+  hoveredNode: null,
+  selectedItem: null,
+  animId: null,
+  eventsBound: false,
+  dashOffset: 0,
+}};
+
+function initGraphSessionSelect() {{
+  const sel = document.getElementById("graph-session-select");
+  if (!sel) return;
+  const prev = sel.value;
+  const bySes = (DATA.graph && DATA.graph.by_session) ? DATA.graph.by_session : {{}};
+  const globCount = (DATA.graph && DATA.graph.global_edges) ? DATA.graph.global_edges.length : 0;
+  let opts = `<option value="">🌐 Todas las sesiones (${{globCount}} relaciones detectadas)</option>`;
+  DATA.sessions.forEach(s => {{
+    const sid = s.session_id;
+    const sEdges = bySes[sid] || [];
+    const confCnt = sEdges.filter(e => e.type === "confirmed").length;
+    const suspCnt = sEdges.filter(e => e.type === "suspected").length;
+    const disp = getSessionDisplay(sid);
+    opts += `<option value="${{esc(sid)}}">📍 ${{esc(disp)}} — ${{confCnt}} reales · ${{suspCnt}} sospechas (${{s.unique_aps}} APs, ${{s.unique_clients}} STAs)</option>`;
+  }});
+  sel.innerHTML = opts;
+  if ([...sel.options].some(o => o.value === prev)) sel.value = prev;
+}}
+
+function resizeGraphCanvas() {{
+  const canvas = document.getElementById("sigint-graph-canvas");
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(400, Math.floor(rect.width));
+  const h = Math.max(420, Math.floor(rect.height || 540));
+  if (canvas.width !== w * dpr || canvas.height !== h * dpr) {{
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+  }}
+}}
+
+function resetGraphView() {{
+  GRAPH_STATE.camera = {{ x: 0, y: 0, zoom: 1.0 }};
+  drawGraphCanvas();
+}}
+
+function toggleGraphPhysics() {{
+  GRAPH_STATE.paused = !GRAPH_STATE.paused;
+  const btn = document.getElementById("graph-pause-btn");
+  if (btn) btn.textContent = GRAPH_STATE.paused ? "▶️ Reanudar Física" : "❄️ Pausar Física";
+}}
+
+function rebuildGraphTopology() {{
+  const canvas = document.getElementById("sigint-graph-canvas");
+  if (!canvas) return;
+  resizeGraphCanvas();
+  bindGraphCanvasEvents(canvas);
+
+  const sid = (document.getElementById("graph-session-select") || {{}}).value || "";
+  const mode = (document.getElementById("graph-edge-mode") || {{}}).value || "all";
+  const q = ((document.getElementById("graph-search") || {{}}).value || "").trim();
+  const showCluster = Boolean((document.getElementById("graph-show-cluster") || {{}}).checked);
+  const showIsolatedAps = Boolean((document.getElementById("graph-show-isolated-aps") || {{}}).checked);
+
+  const rawEdges = sid
+    ? ((DATA.graph && DATA.graph.by_session && DATA.graph.by_session[sid]) ? DATA.graph.by_session[sid] : [])
+    : ((DATA.graph && DATA.graph.global_edges) ? DATA.graph.global_edges : []);
+
+  const filteredEdges = rawEdges.filter(e => {{
+    if (mode === "confirmed" && e.type !== "confirmed") return false;
+    if (mode === "suspected" && e.type !== "suspected") return false;
+    if (mode === "handshake" && !e.has_handshake) return false;
+    if (q) {{
+      const ap = DATA.ap_by_bssid[e.bssid] || {{ bssid: e.bssid, ssid: e.ssid }};
+      const st = DATA.device_by_mac[e.sta_mac] || {{ sta_mac: e.sta_mac }};
+      const matchAp = evaluateDslQuery(q, ap, "ap");
+      const matchSt = evaluateDslQuery(q, st, "sta");
+      const matchReason = (e.reason || "").toLowerCase().includes(q.toLowerCase());
+      if (!matchAp && !matchSt && !matchReason) return false;
+    }}
+    return true;
+  }});
+
+  const oldPositions = {{}};
+  GRAPH_STATE.nodes.forEach(n => {{
+    oldPositions[n.id] = {{ x: n.x, y: n.y, pinned: n.pinned }};
+  }});
+
+  const nodes = [];
+  const nodeById = {{}};
+  const dpr = window.devicePixelRatio || 1;
+  const cx = (canvas.width / dpr) / 2;
+  const cy = (canvas.height / dpr) / 2;
+
+  function ensureApNode(bssid) {{
+    const id = "AP:" + bssid;
+    if (nodeById[id]) return nodeById[id];
+    const ap = DATA.ap_by_bssid[bssid] || {{ bssid, ssid: "", primary_channel: 0, rssi: -80, auth_mode: "UNKNOWN" }};
+    const tag = getNetworkTag(ap.bssid, ap.ssid);
+    const idx = nodes.length;
+    const angle = (idx * 2.39996) % (Math.PI * 2);
+    const rad = 70 + (idx % 6) * 28;
+    const prev = oldPositions[id];
+    const node = {{
+      id,
+      kind: "ap",
+      key: bssid,
+      label: (tag && tag.label) ? tag.label : (ap.ssid || "[SSID Oculto]"),
+      sublabel: `${{bssid}} · ch${{ap.primary_channel}}`,
+      ap,
+      tag,
+      degree: 0,
+      hasHandshake: (ap.pcap_traces || []).some(t => t === "HANDSHAKE" || t === "PMKID" || t === "EAPOL"),
+      isWeak: Boolean(ap.is_weak || ap.wps),
+      x: prev ? prev.x : cx + Math.cos(angle) * rad,
+      y: prev ? prev.y : cy + Math.sin(angle) * rad,
+      vx: 0,
+      vy: 0,
+      radius: 19,
+      pinned: prev ? prev.pinned : false,
+    }};
+    nodes.push(node);
+    nodeById[id] = node;
+    return node;
+  }}
+
+  function ensureStaNode(staMac) {{
+    const id = "STA:" + staMac;
+    if (nodeById[id]) return nodeById[id];
+    const st = DATA.device_by_mac[staMac] || {{ sta_mac: staMac, vendor: "Desconocido", rssi: -80, channel: 0, is_randomized: false }};
+    const tag = getDeviceTag(staMac);
+    const idx = nodes.length;
+    const angle = (idx * 2.39996 + 1.1) % (Math.PI * 2);
+    const rad = 135 + (idx % 7) * 26;
+    const prev = oldPositions[id];
+    const shortVendor = (st.vendor || "").split("(")[0].trim().slice(0, 16);
+    const node = {{
+      id,
+      kind: "sta",
+      key: staMac,
+      label: (tag && tag.label) ? tag.label : staMac,
+      sublabel: shortVendor || (st.is_randomized ? "MAC Aleatoria" : "Cliente STA"),
+      sta: st,
+      tag,
+      degree: 0,
+      x: prev ? prev.x : cx + Math.cos(angle) * rad,
+      y: prev ? prev.y : cy + Math.sin(angle) * rad,
+      vx: 0,
+      vy: 0,
+      radius: 13,
+      pinned: prev ? prev.pinned : false,
+    }};
+    nodes.push(node);
+    nodeById[id] = node;
+    return node;
+  }}
+
+  const graphEdges = [];
+  filteredEdges.forEach(e => {{
+    const apNode = ensureApNode(e.bssid);
+    const staNode = ensureStaNode(e.sta_mac);
+    apNode.degree += 1;
+    staNode.degree += 1;
+    if (e.has_handshake) apNode.hasHandshake = true;
+    graphEdges.push({{
+      source: staNode,
+      target: apNode,
+      raw: e,
+    }});
+  }});
+
+  if (showIsolatedAps) {{
+    DATA.aps.forEach(ap => {{
+      if (sid && !(ap.sessions || []).includes(sid)) return;
+      if (q && !evaluateDslQuery(q, ap, "ap")) return;
+      ensureApNode(ap.bssid);
+    }});
+  }}
+
+  const clusterEdges = [];
+  if (showCluster) {{
+    const bySsid = {{}};
+    nodes.filter(n => n.kind === "ap" && n.ap && n.ap.ssid).forEach(n => {{
+      const s = n.ap.ssid;
+      if (!bySsid[s]) bySsid[s] = [];
+      bySsid[s].push(n);
+    }});
+    Object.entries(bySsid).forEach(([ssidName, apNodes]) => {{
+      if (apNodes.length < 2) return;
+      for (let i = 0; i < apNodes.length - 1; i++) {{
+        clusterEdges.push({{
+          source: apNodes[i],
+          target: apNodes[i + 1],
+          ssid: ssidName,
+        }});
+      }}
+    }});
+  }}
+
+  GRAPH_STATE.nodes = nodes;
+  GRAPH_STATE.nodeById = nodeById;
+  GRAPH_STATE.edges = graphEdges;
+  GRAPH_STATE.clusterEdges = clusterEdges;
+
+  const apNodesCount = nodes.filter(n => n.kind === "ap").length;
+  const staNodesCount = nodes.filter(n => n.kind === "sta").length;
+  const confCount = filteredEdges.filter(e => e.type === "confirmed").length;
+  const suspCount = filteredEdges.filter(e => e.type === "suspected").length;
+
+  const badgeEl = document.getElementById("graph-stats-badge");
+  if (badgeEl) {{
+    badgeEl.textContent = `${{apNodesCount}} APs · ${{staNodesCount}} STAs · ${{confCount}} reales · ${{suspCount}} sospechas`;
+  }}
+
+  renderGraphEdgesTable(filteredEdges);
+  startGraphLoop();
+}}
+
+function stepGraphPhysics() {{
+  const canvas = document.getElementById("sigint-graph-canvas");
+  if (!canvas || GRAPH_STATE.paused) return;
+  const nodes = GRAPH_STATE.nodes;
+  const edges = GRAPH_STATE.edges;
+  const clusters = GRAPH_STATE.clusterEdges;
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.width / dpr;
+  const h = canvas.height / dpr;
+  const cx = w / 2;
+  const cy = h / 2;
+
+  // 1. Repulsión entre todos los pares de nodos
+  for (let i = 0; i < nodes.length; i++) {{
+    const a = nodes[i];
+    for (let j = i + 1; j < nodes.length; j++) {{
+      const b = nodes[j];
+      let dx = b.x - a.x;
+      let dy = b.y - a.y;
+      let distSq = dx * dx + dy * dy;
+      if (distSq < 9) {{
+        dx = (Math.random() - 0.5) * 4;
+        dy = (Math.random() - 0.5) * 4;
+        distSq = dx * dx + dy * dy + 9;
+      }}
+      if (distSq > 95000) continue;
+      const dist = Math.sqrt(distSq);
+      const rep = (a.kind === "ap" && b.kind === "ap") ? 3600 : 2100;
+      const force = rep / distSq;
+      const fx = (dx / dist) * force;
+      const fy = (dy / dist) * force;
+      if (!a.pinned) {{ a.vx -= fx; a.vy -= fy; }}
+      if (!b.pinned) {{ b.vx += fx; b.vy += fy; }}
+    }}
+  }}
+
+  // 2. Atracción elástica en aristas STA <-> AP
+  for (const e of edges) {{
+    const a = e.source;
+    const b = e.target;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+    const ideal = e.raw.type === "confirmed" ? 95 : 130;
+    const k = e.raw.type === "confirmed" ? 0.045 : 0.025;
+    const f = (dist - ideal) * k;
+    const fx = (dx / dist) * f;
+    const fy = (dy / dist) * f;
+    if (!a.pinned) {{ a.vx += fx; a.vy += fy; }}
+    if (!b.pinned) {{ b.vx -= fx; b.vy -= fy; }}
+  }}
+
+  // 3. Atracción suave entre BSSIDs del mismo cluster SSID
+  for (const ce of clusters) {{
+    const a = ce.source;
+    const b = ce.target;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+    const f = (dist - 115) * 0.02;
+    const fx = (dx / dist) * f;
+    const fy = (dy / dist) * f;
+    if (!a.pinned) {{ a.vx += fx; a.vy += fy; }}
+    if (!b.pinned) {{ b.vx -= fx; b.vy -= fy; }}
+  }}
+
+  // 4. Gravedad central suave y amortiguamiento
+  for (const n of nodes) {{
+    if (n.pinned || n === GRAPH_STATE.draggingNode) continue;
+    n.vx += (cx - n.x) * 0.008;
+    n.vy += (cy - n.y) * 0.008;
+    n.vx *= 0.80;
+    n.vy *= 0.80;
+    const maxStep = 9.0;
+    n.x += Math.max(-maxStep, Math.min(maxStep, n.vx));
+    n.y += Math.max(-maxStep, Math.min(maxStep, n.vy));
+  }}
+}}
+
+function drawHexagon(ctx, x, y, r) {{
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {{
+    const ang = (Math.PI / 3) * i - Math.PI / 6;
+    const px = x + r * Math.cos(ang);
+    const py = y + r * Math.sin(ang);
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }}
+  ctx.closePath();
+}}
+
+function drawGraphCanvas() {{
+  const canvas = document.getElementById("sigint-graph-canvas");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.width / dpr;
+  const h = canvas.height / dpr;
+
+  ctx.save();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  // Rejilla táctica sutil de fondo
+  ctx.strokeStyle = "rgba(30, 41, 59, 0.45)";
+  ctx.lineWidth = 1;
+  const gridStep = 40;
+  for (let gx = 0; gx < w; gx += gridStep) {{
+    ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, h); ctx.stroke();
+  }}
+  for (let gy = 0; gy < h; gy += gridStep) {{
+    ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(w, gy); ctx.stroke();
+  }}
+
+  if (GRAPH_STATE.nodes.length === 0) {{
+    ctx.fillStyle = "#8ba0be";
+    ctx.font = "14px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("No hay relaciones confirmadas ni sospechosas para el filtro/sesión actual.", w / 2, h / 2 - 8);
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillText("Activa '📡 Incluir APs sin clientes' o selecciona otra sesión.", w / 2, h / 2 + 16);
+    ctx.restore();
+    return;
+  }}
+
+  ctx.translate(w / 2 + GRAPH_STATE.camera.x, h / 2 + GRAPH_STATE.camera.y);
+  ctx.scale(GRAPH_STATE.camera.zoom, GRAPH_STATE.camera.zoom);
+  ctx.translate(-w / 2, -h / 2);
+
+  GRAPH_STATE.dashOffset = (GRAPH_STATE.dashOffset - 0.35) % 24;
+  const hov = GRAPH_STATE.hoveredNode;
+  const neighborIds = new Set();
+  if (hov) {{
+    neighborIds.add(hov.id);
+    GRAPH_STATE.edges.forEach(e => {{
+      if (e.source.id === hov.id) neighborIds.add(e.target.id);
+      if (e.target.id === hov.id) neighborIds.add(e.source.id);
+    }});
+    GRAPH_STATE.clusterEdges.forEach(ce => {{
+      if (ce.source.id === hov.id) neighborIds.add(ce.target.id);
+      if (ce.target.id === hov.id) neighborIds.add(ce.source.id);
+    }});
+  }}
+
+  // 1. Dibujar aristas de cluster Multi-BSSID (mismo SSID)
+  for (const ce of GRAPH_STATE.clusterEdges) {{
+    const dim = hov && !neighborIds.has(ce.source.id) && !neighborIds.has(ce.target.id);
+    ctx.save();
+    ctx.strokeStyle = dim ? "rgba(192, 132, 252, 0.14)" : "rgba(192, 132, 252, 0.65)";
+    ctx.lineWidth = 1.6;
+    ctx.setLineDash([3, 5]);
+    ctx.beginPath();
+    ctx.moveTo(ce.source.x, ce.source.y);
+    ctx.lineTo(ce.target.x, ce.target.y);
+    ctx.stroke();
+    ctx.restore();
+  }}
+
+  // 2. Dibujar aristas STA <-> AP (Confirmadas vs Sospechas)
+  for (const e of GRAPH_STATE.edges) {{
+    const isHovEdge = hov && (e.source.id === hov.id || e.target.id === hov.id);
+    const dim = hov && !isHovEdge;
+    ctx.save();
+    if (e.raw.type === "confirmed") {{
+      ctx.setLineDash([]);
+      if (e.raw.has_handshake) {{
+        ctx.strokeStyle = dim ? "rgba(251, 191, 36, 0.2)" : "#fbbf24";
+        ctx.lineWidth = isHovEdge ? 3.4 : 2.6;
+      }} else {{
+        ctx.strokeStyle = dim ? "rgba(16, 185, 129, 0.18)" : "#10b981";
+        ctx.lineWidth = isHovEdge ? 3.0 : 2.2;
+      }}
+    }} else {{
+      // Sospecha de conexión (línea discontinua animada naranja)
+      ctx.setLineDash([7, 5]);
+      ctx.lineDashOffset = GRAPH_STATE.dashOffset;
+      ctx.strokeStyle = dim ? "rgba(251, 146, 60, 0.18)" : "#fb923c";
+      ctx.lineWidth = isHovEdge ? 2.6 : 1.8;
+    }}
+
+    ctx.beginPath();
+    ctx.moveTo(e.source.x, e.source.y);
+    ctx.lineTo(e.target.x, e.target.y);
+    ctx.stroke();
+
+    // Etiqueta en el punto medio de la arista cuando se pasa el ratón o hay pocas aristas
+    if (isHovEdge || GRAPH_STATE.edges.length <= 18) {{
+      const mx = (e.source.x + e.target.x) / 2;
+      const my = (e.source.y + e.target.y) / 2;
+      let edgeBadge = "";
+      if (e.raw.type === "confirmed") {{
+        edgeBadge = e.raw.has_handshake ? `🔓 ${{e.raw.frames}}fr` : `${{e.raw.frames}}fr`;
+      }} else {{
+        const subMap = {{
+          PNL_PRESENT: "❓ PNL Presente",
+          CROSS_SESSION_ASSOC: "❓ Otra Sesión",
+          ROAMING_CLUSTER: "❓ Roaming",
+          HIDDEN_CHANNEL_PROXIMITY: "❓ Canal Oculto",
+          PNL_CROSS_SESSION: "❓ PNL Catálogo",
+        }};
+        edgeBadge = subMap[e.raw.subtype] || "❓ Sospecha";
+      }}
+      ctx.font = "600 10px ui-monospace, monospace";
+      const tw = ctx.measureText(edgeBadge).width + 8;
+      ctx.fillStyle = "rgba(9, 14, 26, 0.88)";
+      ctx.fillRect(mx - tw / 2, my - 8, tw, 15);
+      ctx.fillStyle = e.raw.type === "confirmed" ? (e.raw.has_handshake ? "#fbbf24" : "#34d399") : "#fdba74";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(edgeBadge, mx, my);
+    }}
+    ctx.restore();
+  }}
+
+  // 3. Dibujar Nodos (APs como hexágonos y STAs como círculos)
+  for (const n of GRAPH_STATE.nodes) {{
+    const isSelected = GRAPH_STATE.selectedItem && GRAPH_STATE.selectedItem.id === n.id;
+    const isHov = hov && hov.id === n.id;
+    const dim = hov && !neighborIds.has(n.id);
+    ctx.save();
+    ctx.globalAlpha = dim ? 0.25 : 1.0;
+
+    if (n.kind === "ap") {{
+      const r = n.radius + Math.min(7, n.degree * 1.4);
+      let fill = "#0284c7";
+      let stroke = "#38bdf8";
+      if (n.tag && n.tag.category === "PROPIO") {{ fill = "#059669"; stroke = "#34d399"; }}
+      else if (n.tag && (n.tag.category === "OBJETIVO" || n.tag.category === "SOSPECHOSO")) {{ fill = "#b91c1c"; stroke = "#f87171"; }}
+      else if (n.hasHandshake) {{ fill = "#b45309"; stroke = "#fbbf24"; }}
+      else if (n.isWeak) {{ fill = "#991b1b"; stroke = "#f87171"; }}
+
+      if (isSelected || isHov) {{
+        drawHexagon(ctx, n.x, n.y, r + 5);
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }}
+
+      drawHexagon(ctx, n.x, n.y, r);
+      ctx.fillStyle = fill;
+      ctx.fill();
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = 2.2;
+      ctx.stroke();
+
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "700 10px ui-monospace, monospace";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("AP", n.x, n.y);
+
+      // Etiqueta SSID debajo del hexágono
+      ctx.font = "600 11.5px system-ui, sans-serif";
+      ctx.fillStyle = "#e6eef8";
+      ctx.fillText(n.label.slice(0, 22), n.x, n.y + r + 12);
+      ctx.font = "10px ui-monospace, monospace";
+      ctx.fillStyle = "#8ba0be";
+      ctx.fillText(n.sublabel, n.x, n.y + r + 24);
+    }} else {{
+      const r = n.radius + Math.min(4, Math.max(0, n.degree - 1) * 1.2);
+      let fill = n.sta.is_randomized ? "#4c1d95" : "#1e3a8a";
+      let stroke = n.sta.is_randomized ? "#c084fc" : "#60a5fa";
+      if (n.tag && n.tag.category === "PROPIO") {{ fill = "#065f46"; stroke = "#34d399"; }}
+      else if (n.tag && (n.tag.category === "OBJETIVO" || n.tag.category === "SOSPECHOSO")) {{ fill = "#7f1d1d"; stroke = "#f87171"; }}
+
+      if (isSelected || isHov) {{
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, r + 4, 0, Math.PI * 2);
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }}
+
+      ctx.beginPath();
+      ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+      ctx.fillStyle = fill;
+      ctx.fill();
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.fillStyle = "#e6eef8";
+      ctx.font = "600 10.5px ui-monospace, monospace";
+      ctx.textAlign = "center";
+      ctx.fillText(n.label.slice(0, 19), n.x, n.y + r + 11);
+      ctx.font = "9.5px system-ui, sans-serif";
+      ctx.fillStyle = "#8ba0be";
+      ctx.fillText(n.sublabel, n.x, n.y + r + 22);
+    }}
+    ctx.restore();
+  }}
+
+  ctx.restore();
+}}
+
+function screenToWorld(canvas, clientX, clientY) {{
+  const rect = canvas.getBoundingClientRect();
+  const sx = clientX - rect.left;
+  const sy = clientY - rect.top;
+  const w = rect.width;
+  const h = rect.height;
+  const wx = (sx - w / 2 - GRAPH_STATE.camera.x) / GRAPH_STATE.camera.zoom + w / 2;
+  const wy = (sy - h / 2 - GRAPH_STATE.camera.y) / GRAPH_STATE.camera.zoom + h / 2;
+  return {{ x: wx, y: wy }};
+}}
+
+function findGraphNodeAt(wx, wy) {{
+  for (let i = GRAPH_STATE.nodes.length - 1; i >= 0; i--) {{
+    const n = GRAPH_STATE.nodes[i];
+    const r = n.radius + 7;
+    const dx = wx - n.x;
+    const dy = wy - n.y;
+    if (dx * dx + dy * dy <= r * r) return n;
+  }}
+  return null;
+}}
+
+function bindGraphCanvasEvents(canvas) {{
+  if (GRAPH_STATE.eventsBound) return;
+  GRAPH_STATE.eventsBound = true;
+
+  window.addEventListener("resize", () => {{
+    if (document.getElementById("tab-graph").classList.contains("active")) {{
+      resizeGraphCanvas();
+    }}
+  }});
+
+  canvas.addEventListener("mousedown", ev => {{
+    const pt = screenToWorld(canvas, ev.clientX, ev.clientY);
+    const hit = findGraphNodeAt(pt.x, pt.y);
+    if (hit) {{
+      GRAPH_STATE.draggingNode = hit;
+      hit.pinned = true;
+      GRAPH_STATE.selectedItem = hit;
+      renderGraphInspector(hit);
+      canvas.style.cursor = "grabbing";
+    }} else {{
+      GRAPH_STATE.panning = true;
+      GRAPH_STATE.panStart = {{ x: ev.clientX - GRAPH_STATE.camera.x, y: ev.clientY - GRAPH_STATE.camera.y }};
+      canvas.style.cursor = "grabbing";
+    }}
+  }});
+
+  window.addEventListener("mousemove", ev => {{
+    if (GRAPH_STATE.draggingNode) {{
+      const pt = screenToWorld(canvas, ev.clientX, ev.clientY);
+      GRAPH_STATE.draggingNode.x = pt.x;
+      GRAPH_STATE.draggingNode.y = pt.y;
+      return;
+    }}
+    if (GRAPH_STATE.panning) {{
+      GRAPH_STATE.camera.x = ev.clientX - GRAPH_STATE.panStart.x;
+      GRAPH_STATE.camera.y = ev.clientY - GRAPH_STATE.panStart.y;
+      return;
+    }}
+    const rect = canvas.getBoundingClientRect();
+    if (ev.clientX >= rect.left && ev.clientX <= rect.right && ev.clientY >= rect.top && ev.clientY <= rect.bottom) {{
+      const pt = screenToWorld(canvas, ev.clientX, ev.clientY);
+      const hit = findGraphNodeAt(pt.x, pt.y);
+      GRAPH_STATE.hoveredNode = hit;
+      canvas.style.cursor = hit ? "pointer" : "grab";
+    }}
+  }});
+
+  window.addEventListener("mouseup", () => {{
+    GRAPH_STATE.draggingNode = null;
+    GRAPH_STATE.panning = false;
+  }});
+
+  canvas.addEventListener("dblclick", ev => {{
+    const pt = screenToWorld(canvas, ev.clientX, ev.clientY);
+    const hit = findGraphNodeAt(pt.x, pt.y);
+    if (hit) {{
+      hit.pinned = false;
+      if (hit.kind === "ap") openApDossier(hit.key);
+      else openDeviceDossier(hit.key);
+    }}
+  }});
+
+  canvas.addEventListener("wheel", ev => {{
+    ev.preventDefault();
+    const factor = ev.deltaY < 0 ? 1.12 : 0.89;
+    GRAPH_STATE.camera.zoom = Math.max(0.35, Math.min(3.2, GRAPH_STATE.camera.zoom * factor));
+  }}, {{ passive: false }});
+}}
+
+function renderGraphInspector(node) {{
+  const box = document.getElementById("graph-inspector-body");
+  if (!box || !node) return;
+  const relEdges = GRAPH_STATE.edges.filter(e => e.source.id === node.id || e.target.id === node.id);
+
+  if (node.kind === "ap") {{
+    const ap = node.ap;
+    const relHtml = relEdges.map(e => {{
+      const badge = e.raw.type === "confirmed"
+        ? `<span class="badge b-own">✅ REAL (${{e.raw.frames}}fr)</span>`
+        : `<span class="badge b-target">⚠️ SOSPECHA</span>`;
+      return `<div style="padding:6px 0;border-bottom:1px solid var(--border)">
+        <div>${{badge}} <span class="entity-link mono" onclick="openDeviceDossier('${{esc(e.raw.sta_mac)}}')">${{esc(e.raw.sta_mac)}}</span></div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">${{esc(e.raw.reason)}}</div>
+      </div>`;
+    }}).join("") || '<div style="color:var(--muted)">Sin clientes vinculados en esta vista.</div>';
+
+    box.innerHTML = `
+      <div style="margin-bottom:8px"><span class="badge b-known">⬢ PUNTO DE ACCESO</span> ${{renderTagBadge(node.tag)}}</div>
+      <div style="font-size:15px;font-weight:700;color:var(--text)">${{esc(ap.ssid || "[SSID Oculto]")}}</div>
+      <div class="mono" style="font-size:12px;color:var(--accent);margin-bottom:8px">${{esc(ap.bssid)}}</div>
+      <div style="font-size:12px;margin-bottom:8px">
+        <b>Fabricante:</b> ${{esc(ap.vendor)}}<br>
+        <b>Canal / RSSI:</b> ch ${{ap.primary_channel}} · ${{ap.rssi}} dBm<br>
+        <b>Seguridad:</b> ${{esc(ap.auth_mode)}} (${{esc(ap.pairwise_cipher)}}) ${{ap.wps ? "· ⚠️ WPS" : ""}}
+      </div>
+      <div style="margin-bottom:10px">${{renderPcapTracesBadges(ap.pcap_traces, ap.pcap_frames)}}</div>
+      <div style="display:flex;gap:6px;margin-bottom:12px">
+        <button class="btn-primary" onclick="openApDossier('${{esc(ap.bssid)}}')">📂 Abrir Dossier</button>
+        <button onclick="node.pinned=false">🔓 Soltar Nodo</button>
+      </div>
+      <div style="font-weight:600;font-size:12px;color:var(--text);margin-bottom:4px">Relaciones en el Grafo (${{relEdges.length}}):</div>
+      <div style="max-height:210px;overflow-y:auto">${{relHtml}}</div>
+    `;
+  }} else {{
+    const st = node.sta;
+    const relHtml = relEdges.map(e => {{
+      const badge = e.raw.type === "confirmed"
+        ? `<span class="badge b-own">✅ REAL (${{e.raw.frames}}fr)</span>`
+        : `<span class="badge b-target">⚠️ SOSPECHA</span>`;
+      const apLabel = e.raw.ssid || "[SSID Oculto]";
+      return `<div style="padding:6px 0;border-bottom:1px solid var(--border)">
+        <div>${{badge}} <span class="entity-link" onclick="openApDossier('${{esc(e.raw.bssid)}}')"><b>${{esc(apLabel)}}</b> (${{esc(e.raw.bssid)}})</span></div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">${{esc(e.raw.reason)}}</div>
+      </div>`;
+    }}).join("") || '<div style="color:var(--muted)">Sin vínculos en esta vista.</div>';
+
+    box.innerHTML = `
+      <div style="margin-bottom:8px"><span class="badge b-multi">● DISPOSITIVO STA</span> ${{renderTagBadge(node.tag)}}</div>
+      <div class="mono" style="font-size:14px;font-weight:700;color:var(--text)">${{esc(st.sta_mac)}}</div>
+      <div style="font-size:12px;margin:6px 0 8px 0">
+        <b>Fabricante:</b> ${{esc(st.vendor)}}<br>
+        <b>Canal / RSSI:</b> ch ${{st.channel}} · ${{st.rssi}} dBm<br>
+        <b>IE-Fingerprint:</b> <span class="mono">${{esc(st.ie_fingerprint || "—")}}</span>
+      </div>
+      <div style="margin-bottom:10px">${{renderPcapTracesBadges(st.pcap_traces, st.pcap_frames)}}</div>
+      <div style="display:flex;gap:6px;margin-bottom:12px">
+        <button class="btn-primary" onclick="openDeviceDossier('${{esc(st.sta_mac)}}')">📂 Abrir Dossier</button>
+      </div>
+      <div style="font-weight:600;font-size:12px;color:var(--text);margin-bottom:4px">Vínculos con Redes (${{relEdges.length}}):</div>
+      <div style="max-height:210px;overflow-y:auto">${{relHtml}}</div>
+    `;
+  }}
+}}
+
+function renderGraphEdgesTable(edgesList) {{
+  const tbody = document.getElementById("graph-edges-tbody");
+  const countEl = document.getElementById("graph-table-count");
+  if (!tbody) return;
+  if (countEl) countEl.textContent = `${{edgesList.length}} relaciones mostradas`;
+
+  if (edgesList.length === 0) {{
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted);padding:22px">No se detectaron relaciones confirmadas ni sospechas para este filtro.</td></tr>';
+    return;
+  }}
+
+  tbody.innerHTML = edgesList.map(e => {{
+    const st = DATA.device_by_mac[e.sta_mac] || {{ sta_mac: e.sta_mac, vendor: "Desconocido" }};
+    const ap = DATA.ap_by_bssid[e.bssid] || {{ bssid: e.bssid, ssid: e.ssid, auth_mode: "—" }};
+    const stTag = getDeviceTag(e.sta_mac);
+    const apTag = getNetworkTag(e.bssid, ap.ssid);
+
+    const statusBadge = e.type === "confirmed"
+      ? (e.has_handshake
+          ? '<span class="badge b-suspicious">🔓 CONFIRMADA + HANDSHAKE</span>'
+          : '<span class="badge b-own">✅ CONEXIÓN CONFIRMADA</span>')
+      : '<span class="badge b-target">⚠️ SOSPECHA DE CONEXIÓN</span>';
+
+    const sesArr = e.sessions || (e.session_id ? [e.session_id] : []);
+    const sesBadges = sesArr.map(s => `<span class="badge b-neutral">${{esc(getSessionDisplay(s))}}</span>`).join(" ");
+
+    return `<tr>
+      <td>${{statusBadge}}</td>
+      <td class="mono">${{esc(e.confidence || "—")}}</td>
+      <td>
+        <span class="entity-link mono" onclick="openDeviceDossier('${{esc(e.sta_mac)}}')">${{esc(e.sta_mac)}}</span>
+        <div><small style="color:var(--muted)">${{esc(st.vendor)}}</small> ${{stTag ? renderTagBadge(stTag) : ""}}</div>
+      </td>
+      <td>
+        <span class="entity-link" onclick="openApDossier('${{esc(e.bssid)}}')"><b>${{esc(ap.ssid || "[SSID Oculto]")}}</b></span>
+        <div class="mono" style="font-size:11px;color:var(--muted)">${{esc(e.bssid)}} · ${{esc(ap.auth_mode || "")}} ${{apTag ? renderTagBadge(apTag) : ""}}</div>
+      </td>
+      <td class="mono">ch ${{e.channel || ap.primary_channel || "?"}} · ${{e.rssi}} dBm</td>
+      <td>${{esc(e.reason)}}</td>
+      <td>${{renderPcapTracesBadges(e.traces, e.frames)}}</td>
+      <td>${{sesBadges}}</td>
+    </tr>`;
+  }}).join("");
+}}
+
+function startGraphLoop() {{
+  if (GRAPH_STATE.animId) return;
+  function tick() {{
+    const tabEl = document.getElementById("tab-graph");
+    if (tabEl && tabEl.classList.contains("active")) {{
+      stepGraphPhysics();
+      drawGraphCanvas();
+    }}
+    GRAPH_STATE.animId = requestAnimationFrame(tick);
+  }}
+  GRAPH_STATE.animId = requestAnimationFrame(tick);
+}}
+
 function renderAll() {{
   renderOverview();
   renderSessionsTable();
   renderNetworksTable();
   renderDevicesTable();
+  initGraphSessionSelect();
+  rebuildGraphTopology();
   renderCrossSession();
   renderTagsRegistry();
 }}
@@ -2185,6 +3306,8 @@ renderAll();
 if (window.location.protocol.startsWith("http")) {{
   const upBtn = document.getElementById("srv-upload-btn");
   if (upBtn) upBtn.style.display = "inline-flex";
+  const adBtn = document.getElementById("airodump-dl-btn");
+  if (adBtn) adBtn.style.display = "inline-flex";
   const hcBtn = document.getElementById("hc22000-dl-btn");
   if (hcBtn && (DATA.hc22000_lines || []).length > 0) hcBtn.style.display = "inline-flex";
   fetch("/api/tags").then(r => r.ok ? r.json() : null).then(srvTags => {{

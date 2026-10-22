@@ -208,6 +208,16 @@ class HubState:
         return self.jsonl_dir / f"wardrive_import_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jsonl"
 
     def import_jsonl_content(self, raw_text: str, filename_hint: str = None) -> dict:
+        if "BSSID," in raw_text[:512] and "ESSID" in raw_text[:512]:
+            envelopes = engine.parse_airodump_csv_to_jsonl_lines(
+                raw_text, session_name_hint=Path(filename_hint or "airodump").stem
+            )
+            if not envelopes:
+                raise ValueError("El archivo CSV de airodump-ng no contiene entradas válidas")
+            raw_text = "\n".join(json.dumps(e, ensure_ascii=False) for e in envelopes)
+            if filename_hint and filename_hint.lower().endswith(".csv"):
+                filename_hint = Path(filename_hint).stem + ".jsonl"
+
         lines = [ln.strip() for ln in raw_text.splitlines() if ln.strip()]
         if not lines:
             raise ValueError("El archivo está vacío")
@@ -368,6 +378,13 @@ def make_handler(hub: HubState):
                 self._send_json(200, {"dataset": dataset, "tags": tags})
                 return
 
+            if path == "/api/handshakes":
+                # Handshake Center: material criptográfico (EAPOL M1-M4 / PMKID)
+                # por BSSID cruzado con la bóveda (audit_status / PSK recuperada).
+                dataset, tags, _, _, _ = hub.build_current_dataset()
+                self._send_json(200, engine.build_handshake_center(dataset, tags))
+                return
+
             if path == "/api/tags":
                 self._send_json(200, hub.load_tags())
                 return
@@ -404,15 +421,47 @@ def make_handler(hub: HubState):
                     tmp_path.unlink(missing_ok=True)
                 return
 
+            if path == "/export/airodump":
+                _, tags, aps, sightings, promisc_data = hub.build_current_dataset()
+                with tempfile.NamedTemporaryFile("w+", suffix=".csv", delete=False, encoding="utf-8") as tmp:
+                    tmp_path = Path(tmp.name)
+                try:
+                    engine.export_airodump(aps, sightings, promisc_data, tmp_path, tags)
+                    self._send_bytes(
+                        200,
+                        "text/csv; charset=utf-8",
+                        tmp_path.read_bytes(),
+                        {"Content-Disposition": 'attachment; filename="airodump_sigint.csv"'},
+                    )
+                finally:
+                    tmp_path.unlink(missing_ok=True)
+                return
+
             if path == "/export/hc22000":
                 dataset, _, _, _, _ = hub.build_current_dataset()
                 lines = dataset.get("hc22000_lines", [])
+                # Filtro opcional por BSSID: /export/hc22000?bssid=AA:BB:CC:DD:EE:FF
+                qs = parse_qs(parsed.query)
+                bssid_filter = (qs.get("bssid", [""])[0] or "").upper()
+                if bssid_filter:
+                    def _line_bssid(ln: str) -> str:
+                        parts = str(ln).split("*")
+                        if len(parts) < 4 or len(parts[3]) != 12:
+                            return ""
+                        return ":".join(parts[3].lower()[i : i + 2] for i in range(0, 12, 2)).upper()
+                    lines = [ln for ln in lines if _line_bssid(ln) == bssid_filter]
+                    if not lines:
+                        self._send_json(404, {"error": f"sin hashes hc22000 para {bssid_filter}"})
+                        return
+                    fname = f"handshakes_{bssid_filter.replace(':', '')}.hc22000"
+                else:
+                    fname = "handshakes.hc22000"
                 content = ("\n".join(lines) + ("\n" if lines else "")).encode("utf-8")
                 self._send_bytes(
                     200,
                     "text/plain; charset=utf-8",
                     content,
-                    {"Content-Disposition": 'attachment; filename="handshakes.hc22000"'},
+                    {"Content-Disposition": f'attachment; filename="{fname}"'},
                 )
                 return
 

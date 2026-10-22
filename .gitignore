@@ -4,6 +4,8 @@ data/*.csv
 data/*.html
 data/tags.json
 data/.certs/
+data/jsonl/
+data/pcap/
 !data/.gitkeep
 
 __pycache__/

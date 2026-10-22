@@ -180,6 +180,28 @@ def validate_scan_payload(obj: dict) -> None:
         if not isinstance(prom.get("probes"), list) or not isinstance(prom.get("clients"), list):
             raise ValueError("promisc.probes/clients deben ser listas")
 
+    if "ble" in obj and obj["ble"] is not None:
+        ble = obj["ble"]
+        if not isinstance(ble, dict):
+            raise ValueError("ble debe ser un objeto")
+        for k in ("unique_devices", "ibeacon", "eddystone", "findmy_candidates", "other", "adv_frames"):
+            if not isinstance(ble.get(k), int) or ble[k] < 0:
+                raise ValueError(f"ble.{k} inválido")
+        if not isinstance(ble.get("devices"), list):
+            raise ValueError("ble.devices debe ser una lista")
+        for ble_dev in ble["devices"]:
+            if not isinstance(ble_dev, dict):
+                raise ValueError("Elemento de ble.devices no es objeto")
+            if not isinstance(ble_dev.get("mac"), str) or not BSSID_RE.fullmatch(ble_dev["mac"]):
+                raise ValueError("ble.devices[].mac inválido")
+            if not isinstance(ble_dev.get("rssi"), int) or not (-128 <= ble_dev["rssi"] <= 0):
+                raise ValueError("ble.devices[].rssi fuera de rango")
+            for str_key in ("addr_type", "type"):
+                if not isinstance(ble_dev.get(str_key), str):
+                    raise ValueError(f"ble.devices[].{str_key} no es string")
+            if "name" in ble_dev and not isinstance(ble_dev["name"], str):
+                raise ValueError("ble.devices[].name no es string")
+
 
 class ListenerState:
     def __init__(self, out_dir: Path, gps_enabled: bool = False, session_name: str = None):

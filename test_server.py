@@ -55,7 +55,21 @@ SAMPLE_LINE = {
                     "rssi": -55,
                     "channel": 6,
                     "count": 2,
-                }
+                },
+                {
+                    "sta_mac": "DE:AD:BE:EF:11:22",
+                    "ssid": "CorpNet",
+                    "rssi": -62,
+                    "channel": 6,
+                    "count": 3,
+                },
+                {
+                    "sta_mac": "DE:AD:BE:EF:99:99",
+                    "ssid": "RedFantasmaQueNoExiste",
+                    "rssi": -70,
+                    "channel": 1,
+                    "count": 4,
+                },
             ],
             "clients": [
                 {
@@ -100,7 +114,17 @@ class SigintConsoleServerTests(unittest.TestCase):
 
         tag_payload = {
             "sessions": {"9f3a21c4": {"name": "Planta 1"}},
-            "networks": {},
+            "networks": {
+                "BC:30:D9:A4:2E:5C": {
+                    "label": "Router CorpNet",
+                    "category": "OBJETIVO",
+                    "audit_status": "CRACKEADA",
+                    "psk": "Corporativa2026!",
+                    "vector": "Handshake EAPOL 4-Way (WPA*02)",
+                    "evidence": "KEY FOUND! [ Corporativa2026! ]",
+                    "remediation": "Migrar a WPA3-SAE y deshabilitar WPS.",
+                }
+            },
             "devices": {"00:7C:2D:E2:69:48": {"label": "Samsung Corporativo", "category": "CONOCIDO"}},
         }
         req_tags = Request(
@@ -116,6 +140,19 @@ class SigintConsoleServerTests(unittest.TestCase):
             self.assertIn("SIGINT // 802.11", html)
             self.assertIn("Samsung Electronics", html)
             self.assertIn("Planta 1", html)
+            self.assertIn("sigint-graph-canvas", html)
+
+        with urlopen(f"{self.url}/api/dataset") as resp:
+            ds = json.loads(resp.read().decode("utf-8"))
+            edges = ds["dataset"]["graph"]["by_session"]["9f3a21c4"]
+            by_sta = {e["sta_mac"]: e for e in edges}
+            # 00:7C:2D:E2:69:48 tiene tráfico directo confirmado con CorpNet
+            self.assertEqual(by_sta["00:7C:2D:E2:69:48"]["type"], "confirmed")
+            # DE:AD:BE:EF:11:22 busca CorpNet (presente en la sesión) sin trama de datos -> sospecha
+            self.assertEqual(by_sta["DE:AD:BE:EF:11:22"]["type"], "suspected")
+            self.assertEqual(by_sta["DE:AD:BE:EF:11:22"]["subtype"], "PNL_PRESENT")
+            # DE:AD:BE:EF:99:99 solo busca una red fantasma no vista -> descartado del grafo
+            self.assertNotIn("DE:AD:BE:EF:99:99", by_sta)
 
         # Verificar que reimportar el mismo JSONL deduplica al 100 %
         req_dup = Request(
@@ -132,6 +169,23 @@ class SigintConsoleServerTests(unittest.TestCase):
             st = json.loads(resp.read())
             self.assertEqual(st["magic"], "SIGINT-CONSOLE-V1")
             self.assertEqual(st["sessions"]["9f3a21c4"]["max_scan_id"], 1)
+
+        # Verificar exportación airodump-ng CSV (incluyendo la PSK de la bóveda en la columna Key)
+        with urlopen(f"{self.url}/export/airodump") as resp:
+            ad_csv = resp.read().decode("utf-8")
+            self.assertIn("BSSID, First time seen", ad_csv)
+            self.assertIn("Corporativa2026!", ad_csv)
+            self.assertIn("Station MAC, First time seen", ad_csv)
+
+        # Verificar re-importación de un CSV de airodump-ng
+        req_ad = Request(
+            f"{self.url}/api/import?filename=captura_kali-01.csv",
+            data=ad_csv.encode("utf-8"),
+            headers={"Content-Type": "text/csv"},
+        )
+        with urlopen(req_ad) as resp:
+            res_ad = json.loads(resp.read())
+            self.assertEqual(res_ad["imported"], 1)
 
 
 if __name__ == "__main__":

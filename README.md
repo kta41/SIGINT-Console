@@ -76,6 +76,8 @@ Open in your browser:
 | :--- | :--- | :--- |
 | `GET` | `/` | Live SIGINT Web Console rendered from all `.jsonl` files in `/data`. |
 | `GET` | `/api/dataset` | Full correlated intelligence dataset in JSON format. |
+| `GET` | `/api/handshakes` | **Handshake Center**: captured EAPOL M1-M4 / PMKID material per BSSID merged with the evidence vault (`audit_status`, recovered `psk`). |
+| `GET` | `/export/hc22000?bssid=XX:XX:XX:XX:XX:XX` | Downloads hashcat `22000` hashes — globally or filtered to a single BSSID. |
 | `GET` | `/api/tags` | Returns active entity tags (`sessions`, `networks`, `devices`). |
 | `POST` | `/api/tags` | Persists tag/alias/session GPS changes directly to `/data/tags.json`. |
 | `POST` | `/api/import` | Validates and imports JSONL v1 lines into `/data/`. |

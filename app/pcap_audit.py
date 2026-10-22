@@ -506,9 +506,67 @@ def main(argv=None) -> int:
         "--wordlist",
         type=Path,
         default=None,
-        help="Ejecutar auditoría de diccionario con aircrack-ng / hashcat sobre los handshakes capturados",
+        help="Ejecutar auditoría de diccionario con aircrack-ng sobre los handshakes capturados y auto-guardar PSK en tags.json",
+    )
+    parser.add_argument(
+        "--record",
+        metavar="BSSID",
+        default=None,
+        help="Registrar en tags.json (Bóveda de Evidencias) una red auditada/crackeada (combinar con --psk y --notes)",
+    )
+    parser.add_argument(
+        "--psk",
+        default="",
+        help="Clave WPA/WEP recuperada para asociar al BSSID indicado en --record",
+    )
+    parser.add_argument(
+        "--notes",
+        default="",
+        help="Evidencia técnica o notas de auditoría para asociar al BSSID en --record",
     )
     args = parser.parse_args(argv)
+
+    def _save_audit_vault_entry(bssid_key: str, psk_val: str, ssid_val: str = "", vector_val: str = "", evidence_val: str = ""):
+        from datetime import datetime
+        tags_candidates = [
+            Path("/home/Kta41/wardrive/wardrive_data/tags.json"),
+            Path("./wardrive_data/tags.json"),
+            Path("/home/Kta41/GITHUB/SIGINT-Client/captures/tags.json"),
+            Path("/data/tags.json"),
+        ]
+        tags_path = next((p for p in tags_candidates if p.parent.exists()), Path("./tags.json"))
+        tags_obj = {"sessions": {}, "networks": {}, "devices": {}}
+        if tags_path.exists():
+            try:
+                tags_obj.update(json.loads(tags_path.read_text(encoding="utf-8")))
+            except Exception:
+                pass
+        norm = bssid_key.upper()
+        cur = tags_obj.setdefault("networks", {}).get(norm, {})
+        cur["label"] = cur.get("label") or ssid_val or f"Auditada ({norm})"
+        cur["category"] = cur.get("category") or "OBJETIVO"
+        cur["audit_status"] = "CRACKEADA" if psk_val else "VULNERABLE"
+        if psk_val:
+            cur["psk"] = psk_val
+        if vector_val:
+            cur["vector"] = vector_val
+        if evidence_val:
+            cur["evidence"] = evidence_val
+        cur["cvss_severity"] = cur.get("cvss_severity") or ("CRITICAL" if psk_val else "HIGH")
+        cur["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        tags_obj["networks"][norm] = cur
+        tags_path.write_text(json.dumps(tags_obj, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(f"  \033[1;32m[BÓVEDA]\033[0m Evidencia guardada en {tags_path} para {norm} (estado={cur['audit_status']}, PSK='{psk_val or '—'}')")
+
+    if args.record:
+        _save_audit_vault_entry(
+            args.record,
+            args.psk,
+            vector_val="Handshake EAPOL / PMKID",
+            evidence_val=args.notes or f"Registrado vía warwifi --audit ({args.record})",
+        )
+        if not args.paths and not args.wordlist:
+            return 0
 
     pcap_files = []
     if args.paths:
@@ -582,10 +640,43 @@ def main(argv=None) -> int:
             print(f"  -> hcxpcapngtool verificó y exportó: {hcx_out}")
 
     if args.wordlist and args.wordlist.exists() and res["handshakes"]:
+        import re
         aircrack_bin = shutil.which("aircrack-ng")
+        airdecap_bin = shutil.which("airdecap-ng")
         if aircrack_bin:
-            print(f"\n[waraudit] Ejecutando aircrack-ng con diccionario {args.wordlist} ...")
-            subprocess.run([aircrack_bin, "-w", str(args.wordlist), *[str(f) for f in pcap_files]], check=False)
+            for h in res["handshakes"]:
+                bssid_t = h["bssid"]
+                ssid_t = h["ssid"]
+                print(f"\n[waraudit] Ejecutando aircrack-ng sobre {bssid_t} ({ssid_t}) con diccionario {args.wordlist} ...")
+                proc = subprocess.run(
+                    [aircrack_bin, "-b", bssid_t, "-w", str(args.wordlist), *[str(f) for f in pcap_files]],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                out_txt = (proc.stdout or "") + "\n" + (proc.stderr or "")
+                m_key = re.search(r"KEY FOUND!\s*\[\s*(.+?)\s*\]", out_txt)
+                if m_key:
+                    found_psk = m_key.group(1)
+                    print(f"  \033[1;32m🔓 ¡CLAVE RECUPERADA PARA {bssid_t} ({ssid_t}): {found_psk} !\033[0m")
+                    _save_audit_vault_entry(
+                        bssid_t,
+                        found_psk,
+                        ssid_val=ssid_t,
+                        vector_val=h["type"],
+                        evidence_val=f"aircrack-ng KEY FOUND! [ {found_psk} ] usando diccionario {args.wordlist.name}",
+                    )
+                    if airdecap_bin and ssid_t:
+                        for pf in pcap_files:
+                            subprocess.run(
+                                [airdecap_bin, "-b", bssid_t, "-e", ssid_t, "-p", found_psk, str(pf)],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                check=False,
+                            )
+                        print(f"  \033[1;36m[airdecap-ng]\033[0m Tráfico 802.11 desencriptado para {ssid_t} (*-dec.pcap).")
+                else:
+                    print(f"  [aircrack-ng] Clave no encontrada en {args.wordlist.name} para {bssid_t}.")
 
     return 0
 

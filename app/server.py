@@ -97,6 +97,167 @@ class HubState:
                 result.append(f)
         return result
 
+    def list_sessions(self) -> dict:
+        """Inventario de sesiones con emparejado de ficheros jsonl/pcap.
+
+        El session_id se lee del primer payload de cada .jsonl (los nombres
+        canónicos wardrive_YYYYMMDD_HHMM.jsonl no lo llevan). Cada pcap se
+        asocia por regla de nomenclatura del listener: <stem>.pcap o
+        <stem>_<session_id>.pcap; los no emparejados se listan como huérfanos.
+        """
+        tags = self.load_tags()
+        sessions = []
+        claimed_pcaps = set()
+        all_pcaps = self.list_pcap_files()
+        for f in self.list_jsonl_files():
+            sid = None
+            first_recv = ""
+            scans = 0
+            try:
+                with f.open("r", encoding="utf-8") as fh:
+                    for raw in fh:
+                        line = raw.strip()
+                        if not line:
+                            continue
+                        obj = json.loads(line)
+                        payload = obj.get("payload", obj) if isinstance(obj, dict) else {}
+                        if sid is None and isinstance(payload.get("session_id"), str):
+                            sid = payload["session_id"]
+                            if isinstance(obj, dict):
+                                first_recv = obj.get("recv_at", "")
+                        scans += 1
+            except Exception:
+                continue
+            if sid is None:
+                sid = f.stem
+            stem = f.stem
+            pcap_names = []
+            for cand in (f"{stem}.pcap", f"{stem}_{sid}.pcap"):
+                for pf in all_pcaps:
+                    if pf.name == cand and cand not in claimed_pcaps:
+                        claimed_pcaps.add(cand)
+                        pcap_names.append(pf.name)
+            tag = tags.get("sessions", {}).get(sid, {})
+            try:
+                jbytes = f.stat().st_size
+            except Exception:
+                jbytes = 0
+            pbytes = 0
+            for n in pcap_names:
+                for base in (self.pcap_dir, self.data_dir):
+                    if (base / n).exists():
+                        pbytes += (base / n).stat().st_size
+                        break
+            sessions.append(
+                {
+                    "session_id": sid,
+                    "jsonl_file": f.name,
+                    "jsonl_bytes": jbytes,
+                    "pcap_files": pcap_names,
+                    "pcap_bytes": pbytes,
+                    "scans": scans,
+                    "first_seen": first_recv or tag.get("created_at", ""),
+                    "name": tag.get("name", ""),
+                }
+            )
+        sessions.sort(key=lambda s: (s["first_seen"] or "", s["jsonl_file"]))
+        orphans = []
+        for pf in all_pcaps:
+            if pf.name not in claimed_pcaps:
+                try:
+                    obytes = pf.stat().st_size
+                except Exception:
+                    obytes = 0
+                orphans.append({"file": pf.name, "bytes": obytes})
+        return {
+            "sessions": sessions,
+            "orphan_pcaps": orphans,
+            "totals": {
+                "sessions": len(sessions),
+                "scans": sum(s["scans"] for s in sessions),
+                "jsonl_bytes": sum(s["jsonl_bytes"] for s in sessions),
+                "pcap_bytes": sum(s["pcap_bytes"] for s in sessions),
+            },
+        }
+
+    def delete_sessions(self, keep_last=None, session_ids=None, orphans=False, dry_run=True) -> dict:
+        """Borra sesiones (jsonl + pcaps emparejados) y limpia tags.json.
+
+        Selectores: keep_last=N (conserva las N más recientes) o
+        session_ids=[...] (borrado explícito); orphans=True elimina además los
+        pcaps sin jsonl. dry_run=True (por defecto) solo devuelve el plan.
+        """
+        inv = self.list_sessions()
+        sessions = inv["sessions"]
+        if session_ids:
+            wanted = {str(s).upper() for s in session_ids}
+            to_delete = [s for s in sessions if s["session_id"].upper() in wanted]
+            kept = [s for s in sessions if s["session_id"].upper() not in wanted]
+        else:
+            n = int(keep_last) if keep_last is not None else 0
+            cut = max(0, len(sessions) - max(0, n))
+            to_delete = sessions[:cut]
+            kept = sessions[cut:]
+
+        plan_files = []
+        for s in to_delete:
+            plan_files.extend([s["jsonl_file"], *s["pcap_files"]])
+        if orphans:
+            plan_files.extend(o["file"] for o in inv["orphan_pcaps"])
+
+        deleted_files = []
+        if not dry_run:
+            with self.lock:
+                for s in to_delete:
+                    for name in [s["jsonl_file"], *s["pcap_files"]]:
+                        for base in (self.jsonl_dir, self.pcap_dir, self.data_dir):
+                            target = base / name
+                            if target.exists():
+                                try:
+                                    target.unlink()
+                                    deleted_files.append(name)
+                                except Exception:
+                                    pass
+                                break
+                if orphans:
+                    for o in inv["orphan_pcaps"]:
+                        for base in (self.pcap_dir, self.data_dir):
+                            target = base / o["file"]
+                            if target.exists():
+                                try:
+                                    target.unlink()
+                                    deleted_files.append(o["file"])
+                                except Exception:
+                                    pass
+                                break
+                # Higiene de tags.json: eliminar metadatos de sesiones borradas
+                if to_delete and self.tags_path.exists():
+                    try:
+                        data = json.loads(self.tags_path.read_text(encoding="utf-8"))
+                        smap = data.setdefault("sessions", {})
+                        changed = False
+                        for s in to_delete:
+                            if s["session_id"] in smap:
+                                del smap[s["session_id"]]
+                                changed = True
+                        if changed:
+                            self.tags_path.write_text(
+                                json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+                                encoding="utf-8",
+                            )
+                    except Exception:
+                        pass
+                self._rebuild_seen_index()
+
+        return {
+            "dry_run": dry_run,
+            "deleted_sessions": [s["session_id"] for s in to_delete],
+            "planned_files": sorted(set(plan_files)),
+            "deleted_files": sorted(deleted_files),
+            "kept_sessions": [s["session_id"] for s in kept],
+            "orphan_pcaps": [o["file"] for o in inv["orphan_pcaps"]],
+        }
+
     def sync_status(self) -> dict:
         with self.lock:
             self._rebuild_seen_index()
@@ -385,6 +546,11 @@ def make_handler(hub: HubState):
                 self._send_json(200, engine.build_handshake_center(dataset, tags))
                 return
 
+            if path == "/api/sessions":
+                # Gestión de sesiones: inventario con emparejado jsonl/pcap.
+                self._send_json(200, hub.list_sessions())
+                return
+
             if path == "/api/tags":
                 self._send_json(200, hub.load_tags())
                 return
@@ -506,6 +672,22 @@ def make_handler(hub: HubState):
                     self._send_json(200, {"saved": True, "tags": saved})
                 except Exception as exc:
                     self._send_json(400, {"error": str(exc)})
+                return
+
+            if path == "/api/sessions/delete":
+                # Gestión de sesiones: borrado seguro (dry_run por defecto).
+                try:
+                    body = json.loads(raw_body)
+                except Exception as exc:
+                    self._send_json(400, {"error": f"JSON inválido: {exc}"})
+                    return
+                result = hub.delete_sessions(
+                    keep_last=body.get("keep_last"),
+                    session_ids=body.get("sessions"),
+                    orphans=bool(body.get("orphans", False)),
+                    dry_run=bool(body.get("dry_run", True)),
+                )
+                self._send_json(200, result)
                 return
 
             if path == "/api/sync/tags":

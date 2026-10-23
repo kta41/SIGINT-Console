@@ -38,6 +38,8 @@
    - Automatic unmasking of **virtual BSSIDs** (locally-administered bit flipped over a registered IEEE OUI) vs. **randomized privacy MACs (iOS/Android)**.
 5. **Cross-Session Persistence Tracking**:
    - Highlights client devices (`STA MAC`) and access points (`BSSID`) observed across multiple independent capture sessions.
+6. **WPS Pixie-Dust Heuristic Verdicts (`wps_vulndb`)**:
+   - Every WPS-enabled network gets a `wps_verdict` in its dossier (dataset + `/api/dataset`) from an embedded heuristic database of Pixie-Dust-vulnerable chipsets and default-PIN vendors (Realtek/Ralink/MT76xx, Tenda/Netis/..., matched against the WPS IE manufacturer/model metadata plus the OUI vendor). The dataset exposes `wps_summary.pixiedust_probable` so reports can prioritize those targets (authorized assessments only).
 6. **Session Management, Session-Level GPS & Persistent Entity Tagging (`tags.json`)**:
    - Assign custom names and GPS coordinates (`lat, lon`) to capture sessions, and tag devices or networks (`PROPIO`, `CONOCIDO`, `OBJETIVO`, `SOSPECHOSO`, `IGNORAR`) with one-click reset to default identifiers.
    - When running via Docker/HTTP, all tag edits are automatically persisted to `/data/tags.json` via `POST /api/tags`.

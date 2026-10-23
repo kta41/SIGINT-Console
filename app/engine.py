@@ -22,6 +22,7 @@ import struct
 import sys
 
 from pcap_audit import TRACE_ORDER, inspect_pcap_files
+from wps_vulndb import assess_wps
 from ui_template import render_sigint_dashboard
 
 _OUI_DB = None
@@ -638,6 +639,11 @@ def build_intelligence_dataset(aps, sightings, sessions, total_scans, promisc_da
             "pcap_traces": _sort_traces(ap_pcap_traces.get(bssid, set())),
             "pcap_frames": int(ap_pcap_frames.get(bssid, 0)),
             "wps_info": ap_wps_info.get(bssid, {}),
+            "wps_verdict": (
+                assess_wps(ap_wps_info.get(bssid, {}), resolve_vendor(bssid))
+                if d.get("wps")
+                else None
+            ),
             "deauth_reasons": ap_deauth_reasons.get(bssid, []),
             "eapol_msgs": ap_eapol_msgs.get(bssid, []),
         }
@@ -979,6 +985,14 @@ def build_intelligence_dataset(aps, sightings, sessions, total_scans, promisc_da
                 reverse=True,
             ),
             "sessions": promisc_data.get("session_ble", {}),
+        },
+        # P1 WPS: redes con WPS activo y cuáles caen en la base heurística de
+        # Pixie-Dust / PIN por defecto (wps_vulndb.assess_wps).
+        "wps_summary": {
+            "wps_aps": [a["bssid"] for a in ap_list if a.get("wps")],
+            "pixiedust_probable": [
+                a["bssid"] for a in ap_list if (a.get("wps_verdict") or {}).get("vulnerable")
+            ],
         },
         "channel_counts": {str(k): v for k, v in ch_counts.items()},
         "auth_counts": dict(auth_counts.most_common()),

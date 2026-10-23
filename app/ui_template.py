@@ -863,9 +863,21 @@ function loadTags() {{
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {{
       const saved = JSON.parse(raw);
-      Object.assign(base.sessions, saved.sessions || {{}});
-      Object.assign(base.networks, saved.networks || {{}});
-      Object.assign(base.devices, saved.devices || {{}});
+      ["sessions", "networks", "devices"].forEach(grp => {{
+        const sGrp = saved[grp] || {{}};
+        Object.entries(sGrp).forEach(([k, v]) => {{
+          if (!base[grp][k]) {{
+            base[grp][k] = v;
+          }} else if (v && typeof v === "object") {{
+            const cur = base[grp][k];
+            Object.entries(v).forEach(([fk, fv]) => {{
+              if ((cur[fk] === undefined || cur[fk] === "") && fv) {{
+                cur[fk] = fv;
+              }}
+            }});
+          }}
+        }});
+      }});
     }}
   }} catch (e) {{}}
   return base;
@@ -948,21 +960,26 @@ function getDeviceTag(mac) {{
 }}
 
 function renderTagBadge(tagObj) {{
-  if (!tagObj || (!tagObj.label && !tagObj.psk && !tagObj.evidence && !tagObj.audit_status)) {{
+  if (!tagObj || (!tagObj.label && !tagObj.psk && !tagObj.evidence && !tagObj.audit_status && !tagObj.notes)) {{
     return '<span style="color:var(--muted)">—</span>';
   }}
   const parts = [];
+  const tipAttr = tagObj.notes ? ` title="${{esc(tagObj.notes)}}"` : "";
   if (tagObj.label) {{
     const cls = catBadgeClass(tagObj.category);
     const cat = tagObj.category ? `[${{esc(tagObj.category)}}] ` : "";
-    parts.push(`<span class="badge ${{cls}}">${{cat}}${{esc(tagObj.label)}}</span>`);
+    parts.push(`<span class="badge ${{cls}}"${{tipAttr}}>${{cat}}${{esc(tagObj.label)}}</span>`);
   }}
   if (tagObj.psk) {{
     parts.push(`<span class="badge b-suspicious" title="Clave WPA/WEP recuperada y almacenada en Bóveda">🔓 PSK: ${{esc(tagObj.psk)}}</span>`);
   }} else if (tagObj.audit_status === "CRACKEADA") {{
     parts.push(`<span class="badge b-suspicious">🔓 CRACKEADA</span>`);
   }} else if (tagObj.audit_status === "VULNERABLE" || tagObj.evidence) {{
-    parts.push(`<span class="badge b-target">📋 EVIDENCIA</span>`);
+    parts.push(`<span class="badge b-target"${{tipAttr}}>📋 EVIDENCIA</span>`);
+  }}
+  if (tagObj.notes) {{
+    const hasCve = /CVE-\d{{4}}-\d+/i.test(tagObj.notes);
+    parts.push(`<span class="badge ${{hasCve ? 'b-suspicious' : 'b-known'}}" title="${{esc(tagObj.notes)}}">${{hasCve ? '🛡️ CVE' : '📝 NOTA'}}</span>`);
   }}
   return parts.join(" ");
 }}
@@ -1905,7 +1922,12 @@ function openApDossier(bssid) {{
       <div class="kv"><div class="kv-k">Canal / Ancho</div><div class="kv-v">CH ${{ap.primary_channel}} (${{ap.band_mhz}} MHz · ${{ap.proto}})</div></div>
       <div class="kv"><div class="kv-k">Seguridad / Cifrado</div><div class="kv-v">${{esc(ap.auth_mode)}} / ${{esc(ap.pairwise_cipher)}}</div></div>
       <div class="kv"><div class="kv-k">WPS / Oculta</div><div class="kv-v">WPS: ${{ap.wps ? "SÍ" : "NO"}} · Oculta: ${{ap.hidden ? "SÍ" : "NO"}}</div></div>
-      <div class="kv"><div class="kv-k">Señal Máx / Visto</div><div class="kv-v">${{ap.rssi}} dBm (${{ap.sightings}} veces)</div></div>
+      <div
+    ${{tag.notes ? `
+      <div class="kv" style="border-left:3px solid var(--amber);background:#161b2e;margin-bottom:14px">
+        <div class="kv-k" style="color:#fbbf24">📝 NOTAS DE INTELIGENCIA &amp; CVEs CONOCIDOS</div>
+        <div style="margin-top:4px;font-size:12.8px;line-height:1.45">${{esc(tag.notes)}}</div>
+      </div>` : ""}} class="kv"><div class="kv-k">Señal Máx / Visto</div><div class="kv-v">${{ap.rssi}} dBm (${{ap.sightings}} veces)</div></div>
       <div class="kv"><div class="kv-k">Trazas en PCAP</div><div class="kv-v">${{renderPcapTracesBadges(ap.pcap_traces, ap.pcap_frames)}}</div></div>
       ${{ap.wps_info && Object.keys(ap.wps_info).length > 0 ? `<div class="kv"><div class="kv-k">Hardware WPS (PCAP)</div><div class="kv-v">${{esc([ap.wps_info.manufacturer, ap.wps_info.model_name, ap.wps_info.model_number, ap.wps_info.device_name].filter(Boolean).join(" · "))}}</div></div>` : ""}}
       ${{ap.eapol_msgs && ap.eapol_msgs.length > 0 ? `<div class="kv"><div class="kv-k">Mensajes EAPOL Vistos</div><div class="kv-v" style="color:var(--amber)">${{esc(ap.eapol_msgs.join(", "))}}</div></div>` : ""}}
@@ -2124,6 +2146,11 @@ function openDeviceDossier(mac) {{
         <button onclick="openTagEditor('device', '${{d.sta_mac}}', '${{d.sta_mac}}')">🏷️ Etiquetar Dispositivo</button>
         <button onclick="closeModal()">✕ Cerrar</button>
       </div>
+    ${{tag && tag.notes ? `
+      <div class="kv" style="border-left:3px solid var(--accent);background:#161b2e;margin-bottom:14px">
+        <div class="kv-k" style="color:var(--accent)">📝 NOTAS DE INTELIGENCIA DEL DISPOSITIVO</div>
+        <div style="margin-top:4px;font-size:12.8px;line-height:1.45">${{esc(tag.notes)}}</div>
+      </div>` : ""}}
     </div>
     <div class="kv-grid">
       <div class="kv"><div class="kv-k">Nombre / Tag</div><div class="kv-v">${{renderTagBadge(tag)}}</div></div>
@@ -2209,10 +2236,14 @@ function openTagEditor(targetType, key, displayTitle) {{
   showModal(html);
 }}
 
-function resetEntityTag(group, key) {{
-  delete TAGS[group][key];
-  saveTags();
-  closeModal();
+fuconst cur = Object.assign({{}}, TAGS[group][key] || {{}});
+  if (!label && !notes && !cur.psk && !cur.evidence) {{
+    delete TAGS[group][key];
+  }} else {{
+    cur.label = label;
+    cur.category = category;
+    cur.notes = notes;
+    TAGS[group][key] = cur
 }}
 
 function saveEntityTag(group, key) {{
